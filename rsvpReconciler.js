@@ -1,131 +1,207 @@
 
+
+
 import { Client, GatewayIntentBits } from 'discord.js';
-import { getSheetData, updateSheet } from './googleSheetHandler.js';
-import dotenv from 'dotenv';
 
-dotenv.config();
+import { query } from './db.js';
 
-export const reconcileRsvps = async () => {
-  console.log('🚀 Starting RSVP reconciliation...');
-  const client = new Client({
-    intents: [
-      GatewayIntentBits.Guilds,
-      GatewayIntentBits.GuildMessages,
-      GatewayIntentBits.GuildMessageReactions,
-    ],
-  });
-  await client.login(process.env.DISCORD_BOT_TOKEN);
+import getSettings, { loadSettings } from './settings.js';
 
-  try {
-    // 1. Fetch all necessary data from Google Sheets
-    console.log('[DEBUG] Fetching data from Google Sheets...');
-    const [events, rsvpData] = await Promise.all([
-      getSheetData('Event Setting'),
-      getSheetData('RSVP'),
-    ]);
-    console.log(`[DEBUG] Found ${events.length - 1} events in 'Event Setting'.`);
-    console.log(`[DEBUG] Found ${rsvpData.length - 1} users in 'RSVP' sheet.`);
 
-    const newRsvpData = rsvpData.map(row => [...row]); // Create a mutable copy
-    let updatesMade = 0;
 
-    // 2. Get header rows and user column to find indices
-    const eventSettingsHeader = events[0];
-    const eventNameColIdx = eventSettingsHeader.indexOf('Event Name');
-    const threadIdColIdx = eventSettingsHeader.indexOf('Thread ID');
-    const messageIdColIdx = eventSettingsHeader.indexOf('Message ID');
-    const emojiColIdx = eventSettingsHeader.indexOf('Stamp'); // Corrected column name
+const main = async () => {
 
-    console.log(`[DEBUG] 'Event Setting' Header:`, eventSettingsHeader);
-    console.log(`[DEBUG] Index for 'Message ID': ${messageIdColIdx}`);
-    console.log(`[DEBUG] Index for 'Stamp': ${emojiColIdx}`);
+    await loadSettings();
 
-    if (messageIdColIdx === -1 || emojiColIdx === -1) {
-        console.error("❌ Critical Error: Could not find 'Message ID' or 'Stamp' columns in 'Event Setting' sheet. Please check the column names.");
-        return;
+    const settings = getSettings();
+
+
+
+    console.log('🚀 Starting RSVP reconciliation with database...');
+
+    const client = new Client({
+
+        intents: [
+
+            GatewayIntentBits.Guilds,
+
+            GatewayIntentBits.GuildMessages,
+
+            GatewayIntentBits.GuildMessageReactions,
+
+        ],
+
+    });
+
+    await client.login(settings.DISCORD_BOT_TOKEN);
+
+
+
+    try {
+
+        const eventsResult = await query(`
+
+            SELECT id, name, discord_thread_id, discord_message_id, reaction_emoji 
+
+            FROM events 
+
+            WHERE discord_message_id IS NOT NULL AND reaction_emoji IS NOT NULL
+
+        `);
+
+        const eventsToProcess = eventsResult.rows;
+
+        console.log(`[DB] Found ${eventsToProcess.length} events to process.`);
+
+        let totalUpdates = 0;
+
+
+
+        for (const event of eventsToProcess) {
+
+            console.log(`\n[${event.name}] Processing event...`);
+
+            try {
+
+                const channel = await client.channels.fetch(event.discord_thread_id);
+
+                if (!channel || !channel.isTextBased()) {
+
+                    console.log(`[${event.name}] ⚠️ Channel ${event.discord_thread_id} not found or not text-based. Skipping.`);
+
+                    continue;
+
+                }
+
+                const message = await channel.messages.fetch(event.discord_message_id);
+
+                const reaction = message.reactions.cache.get(event.reaction_emoji);
+
+                if (!reaction) {
+
+                    console.log(`[${event.name}] ⚠️ No one has reacted with ${event.reaction_emoji}. Skipping.`);
+
+                    continue;
+
+                }
+
+                const reactionUsers = await reaction.users.fetch();
+
+                const reactionUserIds = new Set(reactionUsers.filter(u => !u.bot).map(u => u.id));
+
+                console.log(`[${event.name}] Found ${reactionUserIds.size} user(s) who reacted.`);
+
+
+
+                const rsvpResult = await query(
+
+                    `SELECT u.discord_user_id FROM rsvps r 
+
+                     JOIN users u ON r.user_id = u.id 
+
+                     WHERE r.event_id = 
+ AND r.status = 'going'`,
+
+                    [event.id]
+
+                );
+
+                const rsvpUserIds = new Set(rsvpResult.rows.map(r => r.discord_user_id));
+
+                console.log(`[${event.name}] Found ${rsvpUserIds.size} user(s) with 'going' status in DB.`);
+
+                
+
+                let updatesMadeForEvent = 0;
+
+                for (const discordUserId of reactionUserIds) {
+
+                    if (!rsvpUserIds.has(discordUserId)) {
+
+                        console.log(`[${event.name}] -- ❗️ Found missing RSVP for Discord user ${discordUserId}.`);
+
+                        const userResult = await query('SELECT id FROM users WHERE discord_user_id = 
+', [discordUserId]);
+
+                        if (userResult.rows.length > 0) {
+
+                            const internalUserId = userResult.rows[0].id;
+
+                            await query(
+
+                                `INSERT INTO rsvps (user_id, event_id, status, source, rsvp_at) 
+
+                                 VALUES (
+, $2, 'going', 'reconciler', NOW()) 
+
+                                 ON CONFLICT (user_id, event_id) DO UPDATE SET status = 'going'`,
+
+                                [internalUserId, event.id]
+
+                            );
+
+                            console.log(`[${event.name}] -- ✅ Synced RSVP for ${discordUserId}.`);
+
+                            updatesMadeForEvent++;
+
+                        } else {
+
+                            console.log(`[${event.name}] -- ⚠️ User with Discord ID ${discordUserId} who reacted is not in the users table.`);
+
+                        }
+
+                    }
+
+                }
+
+
+
+                if(updatesMadeForEvent > 0) {
+
+                    console.log(`[${event.name}] Synced ${updatesMadeForEvent} missing RSVP(s).`);
+
+                    totalUpdates += updatesMadeForEvent;
+
+                } else {
+
+                    console.log(`[${event.name}] All RSVPs are in sync.`);
+
+                }
+
+            } catch (error) {
+
+                console.error(`[${event.name}] ❌ An error occurred:`, error.message);
+
+            }
+
+        }
+
+
+
+        if (totalUpdates > 0) {
+
+            console.log(`\n✅ Finished reconciliation. Synced a total of ${totalUpdates} missing RSVP(s).`);
+
+        } else {
+
+            console.log('\n✅ Finished reconciliation. All events are in sync.');
+
+        }
+
+    } catch (error) {
+
+        console.error('❌ An unexpected error occurred during reconciliation:', error);
+
+    } finally {
+
+        client.destroy();
+
     }
 
-    const rsvpHeader = rsvpData[0];
-    const rsvpUserNames = rsvpData.map(row => row[0]);
-
-    const eventsToProcess = events.slice(1).filter(row => row[messageIdColIdx] && row[emojiColIdx]);
-    console.log(`[DEBUG] Found ${eventsToProcess.length} events with Message ID and Reaction to process.`);
-
-    // 3. Iterate through each event defined in 'Event Setting'
-    for (const eventRow of eventsToProcess) {
-      const eventName = eventRow[eventNameColIdx];
-      const threadId = eventRow[threadIdColIdx];
-      const messageId = eventRow[messageIdColIdx];
-      const emoji = eventRow[emojiColIdx];
-
-      console.log(`\n[${eventName}] Processing event...`);
-      console.log(`[${eventName}] Thread: ${threadId}, Message: ${messageId}, Emoji: ${emoji}`);
-
-      const rsvpEventCol = rsvpHeader.indexOf(eventName);
-      if (rsvpEventCol === -1) {
-        console.log(`[${eventName}] ⚠️ Event not found in 'RSVP' sheet header. Skipping.`);
-        continue;
-      }
-
-      try {
-        // 4. Fetch reaction data from Discord
-        console.log(`[${eventName}] Fetching message from Discord...`);
-        const channel = await client.channels.fetch(threadId);
-        if (!channel || !channel.isTextBased()) {
-            console.log(`[${eventName}] ⚠️ Channel ${threadId} not found or is not a text channel. Skipping.`);
-            continue;
-        }
-        const message = await channel.messages.fetch(messageId);
-        const reaction = message.reactions.cache.get(emoji);
-
-        if (!reaction) {
-          console.log(`[${eventName}] ⚠️ No one has reacted with ${emoji} yet. Skipping.`);
-          continue;
-        }
-
-        console.log(`[${eventName}] Fetching users for ${emoji} reaction...`);
-        const reactionUsers = await reaction.users.fetch();
-        console.log(`[${eventName}] Found ${reactionUsers.size} user(s) who reacted.`);
-
-        // 5. Compare and find missing RSVPs
-        for (const user of reactionUsers.values()) {
-          if (user.bot) continue; // Ignore bots
-
-          console.log(`[${eventName}] -- Checking user: ${user.username}`);
-          const userRowIndex = rsvpUserNames.indexOf(user.username);
-          
-          if (userRowIndex === -1) {
-            console.log(`[${eventName}] -- ⚠️ User '${user.username}' who reacted is not in the 'RSVP' sheet user list. Skipping.`);
-            continue;
-          }
-
-          const currentRsvpStatus = newRsvpData[userRowIndex][rsvpEventCol];
-          console.log(`[${eventName}] -- Current RSVP status for '${user.username}' is: '${currentRsvpStatus || 'EMPTY'}'`);
-
-          // If the cell is empty, mark it as 'RSVP'
-          if (!currentRsvpStatus) {
-            console.log(`[${eventName}] -- ❗️ Found missing RSVP for '${user.username}'. Staging update.`);
-            newRsvpData[userRowIndex][rsvpEventCol] = new Date().toISOString();
-            updatesMade++;
-          }
-        }
-      } catch (error) {
-        console.error(`[${eventName}] ❌ An error occurred while processing event:`, error.message);
-      }
-    }
-
-    // 6. Update the sheet if any changes were made
-    if (updatesMade > 0) {
-      console.log(`\n[INFO] Found ${updatesMade} total discrepancies. Updating sheet...`);
-      await updateSheet('RSVP', newRsvpData);
-      console.log(`✅ Finished reconciliation. Updated ${updatesMade} missing RSVP(s).`);
-    } else {
-      console.log('\n✅ Finished reconciliation. No discrepancies found.');
-    }
-
-  } catch (error) {
-    console.error('❌ An unexpected error occurred during reconciliation:', error);
-  } finally {
-    client.destroy();
-  }
 };
+
+
+
+main().catch(console.error);
+
+

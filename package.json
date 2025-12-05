@@ -11,6 +11,7 @@
     "googleapis": "^160.0.0",
     "node-fetch": "^3.3.2",
     "npm-run-all": "^4.1.5",
+    "pg": "^8.16.3",
     "stripe": "^18.4.0",
     "yargs": "^17.0.0"
   },
@@ -18,10 +19,8 @@
     "start": "npm-run-all --parallel start:server start:rsvp-listener",
     "start:server": "node server.js",
     "start:rsvp-listener": "node rsvpListener.js",
-
     "export-users": "node discordUserExporter.js",
     "update-rsvp": "node updateRsvp.js",
-
     "check-deadlines": "node deadlineChecker.js",
     "reconcile-rsvps": "node rsvpReconciler.js",
     "cron:run": "npm-run-all -s check-deadlines reconcile-rsvps"

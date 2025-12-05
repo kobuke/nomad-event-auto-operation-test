@@ -2,127 +2,461 @@
 import express from 'express';
 import bodyParser from 'body-parser';
 import stripe from 'stripe';
-import dotenv from 'dotenv';
-import { getEventDetailsFromSheet, updatePaymentStatusInSheet } from './googleSheetHandler.js';
+import { query } from './db.js';
 import { Client as DiscordClient, IntentsBitField } from 'discord.js';
+import getSettings, { loadSettings } from './settings.js';
 
-dotenv.config();
+// --- Database Helper Functions ---
 
-const stripeClient = new stripe(process.env.STRIPE_SECRET_KEY);
-
-
-
-const app = express();
-const PORT = process.env.PORT || 8080;
-
-const discordClient = new DiscordClient({
-  intents: [
-    IntentsBitField.Flags.Guilds,
-    IntentsBitField.Flags.GuildMessages,
-    IntentsBitField.Flags.MessageContent,
-    IntentsBitField.Flags.DirectMessages,
-  ],
-});
-
-discordClient.login(process.env.DISCORD_BOT_TOKEN);
-
-discordClient.on('ready', () => {
-  console.log(`Logged in to Discord as ${discordClient.user.tag}`);
-});
-
-app.post('/create-checkout-session', bodyParser.json(), async (req, res) => {
-  const { eventId, userId } = req.body;
-
-  if (!eventId || !userId) {
-    return res.status(400).json({ error: 'Missing eventId or userId' });
-  }
-
+const getEventDetailsFromDb = async (eventName) => {
   try {
-    const eventDetails = await getEventDetailsFromSheet(eventId);
-    if (!eventDetails) {
-      return res.status(404).json({ error: 'Event not found or details missing' });
-    }
+    const res = await query('SELECT name, price_jpy FROM events WHERE name = $1', [eventName]);
+    if (res.rows.length === 0) return null;
+    return { title: res.rows[0].name, fee: res.rows[0].price_jpy };
+  } catch (error) {
+    console.error('Error getting event details from DB:', error);
+    return null;
+  }
+};
 
-    const session = await stripeClient.checkout.sessions.create({
-      payment_method_types: ['card'],
-      line_items: [
-        {
-          price_data: {
-            currency: 'jpy',
-            product_data: {
-              name: eventDetails.title,
-            },
-            unit_amount: eventDetails.fee, // 参加費（円）をStripeの最小単位（円）で設定
-          },
-          quantity: 1,
-        },
-      ],
-      mode: 'payment',
-      success_url: `https://nomad-event-auto-operation-production.up.railway.app/success?session_id={CHECKOUT_SESSION_ID}`,
-      cancel_url: `https://nomad-event-auto-operation-production.up.railway.app/cancel`,
-      metadata: {
-        discord_id: userId,
-        event_id: eventId,
-      },
+const updatePaymentStatusInDb = async (discordId, eventName, paymentStatus) => {
+  try {
+    const userRes = await query('SELECT id FROM users WHERE discord_user_id = $1', [discordId]);
+    if (userRes.rows.length === 0) {
+      console.error(`User with Discord ID ${discordId} not found.`);
+      return false;
+    }
+    const userId = userRes.rows[0].id;
+
+    const eventRes = await query('SELECT id FROM events WHERE name = $1', [eventName]);
+    if (eventRes.rows.length === 0) {
+      console.error(`Event with name ${eventName} not found.`);
+      return false;
+    }
+    const eventId = eventRes.rows[0].id;
+
+    await query(
+      `UPDATE payments SET status = $1, paid_at = CASE WHEN $1 = 'paid' THEN NOW() ELSE paid_at END WHERE user_id = $2 AND event_id = $3`,
+      [paymentStatus, userId, eventId]
+    );
+
+    if (paymentStatus === 'paid') {
+      await query(
+        `INSERT INTO rsvps (user_id, event_id, status, source)
+         VALUES ($1, $2, 'going', 'payment')
+         ON CONFLICT (user_id, event_id)
+         DO UPDATE SET status = 'going', updated_at = NOW()`,
+        [userId, eventId]
+      );
+    }
+    console.log(`✅ DB: Payment status updated to '${paymentStatus}' for user ${discordId} for event ${eventName}`);
+    return true;
+  } catch (error) {
+    console.error('Error updating payment status in DB:', error);
+    return false;
+  }
+};
+
+
+// --- Main Application ---
+
+const main = async () => {
+    // Catch unhandled promise rejections globally
+    process.on('unhandledRejection', (reason, promise) => {
+        console.error('Server: Unhandled Rejection at:', promise, 'reason:', reason);
+        // Application specific error logging, cleanup, or exit
+        // process.exit(1); // Uncomment to exit on unhandled rejection
     });
 
-    res.json({ url: session.url });
-  } catch (error) {
-    console.error('Error creating checkout session:', error);
-    res.status(500).json({ error: error.message });
-  }
-});
+    await loadSettings();
+    const settings = getSettings();
 
-// Stripe Webhook
-const stripeEndpointSecret = process.env.STRIPE_WEBHOOK_SECRET;
+    const stripeClient = new stripe(settings.STRIPE_SECRET_KEY);
+    const discordClient = new DiscordClient({
+        intents: [
+            IntentsBitField.Flags.Guilds,
+            IntentsBitField.Flags.GuildMessages,
+            IntentsBitField.Flags.MessageContent,
+            IntentsBitField.Flags.DirectMessages,
+        ],
+    });
 
-app.post('/stripe-webhook', bodyParser.raw({ type: 'application/json' }), async (req, res) => {
-  const sig = req.headers['stripe-signature'];
-  let event;
+    discordClient.login(settings.DISCORD_BOT_TOKEN);
+    discordClient.on('ready', () => {
+        console.log(`Logged in to Discord as ${discordClient.user.tag}`);
+    });
 
-  try {
-    event = stripeClient.webhooks.constructEvent(req.body, sig, stripeEndpointSecret);
-  } catch (err) {
-    console.log(`⚠️ Webhook signature verification failed.`, err.message);
-    return res.sendStatus(400);
-  }
+    const app = express();
+    const PORT = process.env.PORT || 8080;
 
-  if (event.type === 'checkout.session.completed') {
-    const session = event.data.object;
-    const discordId = session.client_reference_id || session.metadata?.discord_id;
-    const eventId = session.metadata?.event_id;
+    app.use(express.static('public'));
+        app.use(bodyParser.json());
+        app.use(bodyParser.raw({ type: 'application/json' }));
+    
+        // Test route for debugging logging
+        app.get('/test', (req, res) => {
+            console.log('Server: /test route hit successfully.');
+            res.send('Test route OK');
+        });
+    
+        // --- API Endpoints ---
+        const V_TABLES = ['events', 'users', 'rsvps', 'payments']; // Valid tables for security
 
-    if (!discordId || !eventId) {
-      console.log('⚠️ discord_id or event_id not found in session');
-      return res.json({ status: 'missing data' });
-    }
+        // Settings API (Specific routes, must be defined before generic ones)
+        app.get('/api/settings', async (req, res) => {
+            try {
+                console.log('Server: /api/settings route hit.');
+                const { rows } = await query('SELECT key, value, description FROM app_settings');
+                res.json(rows);
+            } catch (error) {
+                console.error('Server API: Error fetching settings (from specific route):', error);
+                res.status(500).json({ error: 'Failed to fetch settings' });
+            }
+        });
+    
+        app.put('/api/settings', async (req, res) => {
+            const { key, value } = req.body;
+            if (!key || typeof value === 'undefined') {
+                return res.status(400).json({ error: 'Missing key or value' });
+            }
+            try {
+                await query('UPDATE app_settings SET value = $1, updated_at = NOW() WHERE key = $2', [value, key]);
+                await loadSettings(); // Reload settings in memory
+                res.json({ success: true, message: `Setting '${key}' updated.` });
+            } catch (error) {
+                console.error(`Server API: Error updating setting ${key}:`, error);
+                res.status(500).json({ error: `Failed to update setting ${key}`});
+            }
+        });
 
-    console.log(`✅ Payment completed for Discord ID: ${discordId}`);
-    const success = await updatePaymentStatusInSheet(discordId, eventId, '支払い済み');
+        app.delete('/api/settings/:key', async (req, res) => {
+            const { key } = req.params;
+            if (!key) {
+                return res.status(400).json({ error: 'Missing key' });
+            }
+            try {
+                const result = await query('DELETE FROM app_settings WHERE key = $1', [key]);
+                if (result.rowCount === 0) {
+                    return res.status(404).json({ error: `Setting with key '${key}' not found.` });
+                }
+                await loadSettings(); // Reload settings in memory
+                res.status(204).send(); // No Content
+            } catch (error) {
+                console.error(`Server API: Error deleting setting ${key}:`, error);
+                res.status(500).json({ error: `Failed to delete setting ${key}`});
+            }
+        });
 
-    if (success) {
-      try {
-        const user = await discordClient.users.fetch(discordId);
-        if (user) {
-          await user.send(`イベントへの決済が完了しました！ご参加ありがとうございます。`);
-          console.log(`✅ Sent payment confirmation DM to ${user.tag}`);
+        // Dashboard Events API
+        app.get('/api/dashboard/events', async (req, res) => {
+            try {
+                console.log('Server: /api/dashboard/events route hit.');
+                const { rows } = await query(`
+                    SELECT
+                        e.id,
+                        e.name AS title,
+                        TO_CHAR(e.start_at, 'YYYY-MM-DD"T"HH24:MI:SS') || '+09:00' AS start_at,
+                        e.price_jpy AS fee,
+                        e.max_capacity,
+                        e.reaction_emoji AS emoji,
+                        e.discord_message_id,
+                        e.discord_thread_id,
+                        TO_CHAR(e.deadline_at, 'YYYY-MM-DD"T"HH24:MI:SS') || '+09:00' AS deadline_at,
+                        TO_CHAR(e.remind1_at, 'YYYY-MM-DD"T"HH24:MI:SS') || '+09:00' AS remind1_at,
+                        TO_CHAR(e.remind2_at, 'YYYY-MM-DD"T"HH24:MI:SS') || '+09:00' AS remind2_at,
+                        COUNT(DISTINCT CASE WHEN r.status = 'going' THEN r.user_id ELSE NULL END) AS "currentParticipants",
+                        COUNT(DISTINCT CASE WHEN p.status = 'paid' THEN p.user_id ELSE NULL END) AS "paidCount"
+                    FROM
+                        events e
+                    LEFT JOIN
+                        rsvps r ON e.id = r.event_id
+                    LEFT JOIN
+                        payments p ON e.id = p.event_id
+                    GROUP BY
+                        e.id
+                    ORDER BY
+                        e.start_at DESC;
+                `);
+                res.json(rows);
+            } catch (error) {
+                console.error('Server API: Error fetching dashboard events:', error);
+                res.status(500).json({ error: 'Failed to fetch dashboard events' });
+            }
+        });
+
+        // Event-specific APIs
+        app.get('/api/events/:id/rsvps', async (req, res) => {
+            const { id } = req.params;
+            try {
+                const { rows } = await query(`
+                    SELECT
+                        u.username,
+                        u.display_name,
+                        r.status,
+                        r.rsvp_at
+                    FROM
+                        rsvps r
+                    JOIN
+                        users u ON r.user_id = u.id
+                    WHERE
+                        r.event_id = $1 AND r.status = 'going'
+                    ORDER BY
+                        r.rsvp_at ASC;
+                `, [id]);
+                res.json(rows);
+            } catch (error) {
+                console.error(`Server API: Error fetching RSVPs for event ${id}:`, error);
+                res.status(500).json({ error: 'Failed to fetch RSVPs' });
+            }
+        });
+
+        app.get('/api/events/:id/payments', async (req, res) => {
+            const { id } = req.params;
+            try {
+                const { rows } = await query(`
+                    SELECT
+                        u.username,
+                        u.display_name,
+                        p.status,
+                        p.amount_jpy,
+                        p.paid_at,
+                        p.dm_sent_at
+                    FROM
+                        payments p
+                    JOIN
+                        users u ON p.user_id = u.id
+                    WHERE
+                        p.event_id = $1 AND p.status IN ('paid', 'dm_sent')
+                    ORDER BY
+                        p.status DESC, p.paid_at ASC, p.dm_sent_at ASC;
+                `, [id]);
+                res.json(rows);
+            } catch (error) {
+                console.error(`Server API: Error fetching payments for event ${id}:`, error);
+                res.status(500).json({ error: 'Failed to fetch payments' });
+            }
+        });
+        
+        
+    // Generic GET all
+    app.get('/api/:table', async (req, res) => {
+        const { table } = req.params;
+        if (!V_TABLES.includes(table)) return res.status(400).json({ error: 'Invalid table' });
+        // Simplified queries for overview
+            const queries = {
+                events: 'SELECT * FROM events ORDER BY start_at DESC',
+                users: 'SELECT id, discord_user_id, username, display_name, role FROM users ORDER BY created_at DESC',
+                rsvps: `SELECT r.id, u.username, e.name as event_name, r.status, r.rsvp_at FROM rsvps r JOIN users u ON r.user_id = u.id JOIN events e ON r.event_id = e.id ORDER BY r.created_at DESC`,
+                payments: `SELECT p.id, u.username, e.name as event_name, p.status, p.amount_jpy FROM payments p JOIN users u ON p.user_id = u.id JOIN events e ON p.event_id = e.id ORDER BY p.created_at DESC`,
+            };
+            try {
+                const { rows } = await query(queries[table]);
+                res.json(rows);
+            }
+            catch (e) { res.status(500).json({ error: e.message });}
+    });
+    // Get table schema for dynamic form generation
+    app.get('/api/:table/schema', async (req, res) => {
+        const { table } = req.params;
+        if (!V_TABLES.includes(table)) return res.status(400).json({ error: 'Invalid table' });
+        try {
+            console.log(`Server API: Fetching schema for table: ${table}`);
+            const schemaQuery = `
+                SELECT 
+                    column_name, 
+                    data_type, 
+                    is_nullable, 
+                    udt_name 
+                FROM information_schema.columns 
+                WHERE table_schema = 'public' AND table_name = $1
+                ORDER BY ordinal_position`;
+            console.log(`Server API: Executing schema query: "${schemaQuery}" with param: "${table}"`);
+            let { rows: columns } = await query(schemaQuery, [table]);
+
+            // For ENUM types, fetch their allowed values
+            for (let i = 0; i < columns.length; i++) {
+                const col = columns[i];
+                if (col.udt_name.startsWith('enum_')) {
+                    const enumValuesQuery = `
+                        SELECT e.enumlabel AS value
+                        FROM pg_type t
+                        JOIN pg_enum e ON t.oid = e.enumtypid
+                        WHERE t.typname = $1
+                        ORDER BY e.enumsortorder;
+                    `;
+                    const { rows: enumValues } = await query(enumValuesQuery, [col.udt_name]);
+                    col.enumValues = enumValues.map(ev => ev.value);
+                }
+            }
+            
+            console.log(`Server API: Fetched schema for ${table}:`, columns);
+            res.json(columns);
+        } catch (e) { 
+            console.error(`Server API: Error fetching schema for ${table}:`, e);
+            res.status(500).json({ error: e.message }); 
         }
-      } catch (dmError) {
-        console.error(`❌ Failed to send payment confirmation DM to ${discordId}:`, dmError);
-      }
-    }
-    res.json({ status: success ? 'success' : 'sheet update failed' });
-  } else {
-    res.json({ status: 'ignored' });
-  }
-});
+    });
 
-app.get('/success', (req, res) => {
-  res.send('<h1>Payment Successful!</h1><p>Thank you for your participation! Please check your Discord DMs for further details.</p>');
-});
+    // Generic GET one
+    app.get('/api/:table/:id', async (req, res) => {
+        const { table, id } = req.params;
+        if (!V_TABLES.includes(table)) return res.status(400).json({ error: 'Invalid table' });
+        try {
+            const { rows } = await query(`SELECT * FROM ${table} WHERE id = $1`, [id]);
+            if (rows.length === 0) return res.status(404).json({ error: 'Record not found' });
+            res.json(rows[0]);
+        } catch (e) { 
+            console.error(`Server API: Error fetching ${table} ID ${id}:`, e);
+            res.status(500).json({ error: e.message }); 
+        }
+    });
 
-app.get('/cancel', (req, res) => {
-  res.send('<h1>決済がキャンセルされました。</h1><p>ご不明な点があれば、お問い合わせください。</p>');
-});
+    // Generic UPDATE one
+    app.put('/api/:table/:id', async (req, res) => {
+        const { table, id } = req.params;
+        if (!V_TABLES.includes(table)) return res.status(400).json({ error: 'Invalid table' });
+        
+        const updates = req.body;
+        delete updates.id; // cannot update id
+        delete updates.created_at; // cannot update created_at
+        updates.updated_at = new Date();
 
-app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
+        // Convert boolean strings to actual booleans (from frontend forms)
+        // Convert empty strings to null for optional fields
+        for (const key in updates) {
+            if (updates[key] === 'true') updates[key] = true;
+            else if (updates[key] === 'false') updates[key] = false;
+            // Assuming numeric fields that are optional might send empty string
+            if (updates[key] === '') updates[key] = null; 
+        }
+
+        const setClause = Object.keys(updates).map((key, i) => `"${key}" = $${i + 1}`).join(', ');
+        const values = Object.values(updates);
+
+        if (setClause.length === 0) {
+            console.warn(`Server API: No fields to update for ${table} ID ${id}`);
+            return res.status(400).json({ error: 'No fields to update' });
+        }
+        
+        try {
+            console.log(`Server API: Attempting UPDATE on ${table} ID ${id}`);
+            console.log(`Server API: SET clause: ${setClause}`);
+            console.log(`Server API: Values: ${JSON.stringify(values)}`);
+            const { rows } = await query(`UPDATE ${table} SET ${setClause} WHERE id = $${values.length + 1} RETURNING *`, [...values, id]);
+            console.log(`Server API: Successfully updated ${table} ID ${id}.`);
+            res.json(rows[0]);
+        } catch (e) { 
+            console.error(`Server API: Error updating ${table} ID ${id}:`, e);
+            res.status(500).json({ error: e.message }); 
+        }
+    });
+
+    // Generic DELETE one
+    app.delete('/api/:table/:id', async (req, res) => {
+        const { table, id } = req.params;
+        if (!V_TABLES.includes(table)) return res.status(400).json({ error: 'Invalid table' });
+        try {
+            await query(`DELETE FROM ${table} WHERE id = $1`, [id]);
+            res.status(204).send(); // No Content
+        } catch (e) { res.status(500).json({ error: e.message }); }
+    });
+
+    // Generic CREATE one
+    app.post('/api/:table', async (req, res) => {
+        const { table } = req.params;
+        if (!V_TABLES.includes(table)) return res.status(400).json({ error: 'Invalid table' });
+        
+        const fields = req.body;
+        // Basic validation
+        if (table === 'events' && !fields.name) {
+            return res.status(400).json({ error: 'Event name is required' });
+        }
+
+        const columns = Object.keys(fields).map(f => `"${f}"`).join(', ');
+        const placeholders = Object.keys(fields).map((_, i) => `$${i + 1}`).join(', ');
+        const values = Object.values(fields);
+
+        if (columns.length === 0) return res.status(400).json({ error: 'No fields to insert' });
+
+        try {
+            const { rows } = await query(`INSERT INTO ${table} (${columns}) VALUES (${placeholders}) RETURNING *`, values);
+            res.status(201).json(rows[0]);
+        } catch (e) { res.status(500).json({ error: e.message }); }
+    });
+
+    // --- Stripe Endpoints ---
+    
+    app.post('/create-checkout-session', async (req, res) => {
+        const { eventId, userId } = req.body;
+        if (!eventId || !userId) {
+            return res.status(400).json({ error: 'Missing eventId or userId' });
+        }
+        try {
+            const eventDetails = await getEventDetailsFromDb(eventId);
+            if (!eventDetails) {
+                return res.status(404).json({ error: 'Event not found or details missing' });
+            }
+            const session = await stripeClient.checkout.sessions.create({
+                payment_method_types: ['card'],
+                line_items: [{
+                    price_data: { currency: 'jpy', product_data: { name: eventDetails.title }, unit_amount: eventDetails.fee },
+                    quantity: 1,
+                }],
+                mode: 'payment',
+                success_url: `https://${settings.RAILWAY_PUBLIC_DOMAIN}/success`,
+                cancel_url: `https://${settings.RAILWAY_PUBLIC_DOMAIN}/cancel`,
+                metadata: { discord_id: userId, event_id: eventId },
+            });
+            res.json({ url: session.url });
+        } catch (error) {
+            console.error('Error creating checkout session:', error);
+            res.status(500).json({ error: error.message });
+        }
+    });
+
+    app.post('/stripe-webhook', async (req, res) => {
+        const sig = req.headers['stripe-signature'];
+        let event;
+        try {
+            event = stripeClient.webhooks.constructEvent(req.body, sig, settings.STRIPE_WEBHOOK_SECRET);
+        } catch (err) {
+            console.log(`⚠️ Webhook signature verification failed.`, err.message);
+            return res.sendStatus(400);
+        }
+        if (event.type === 'checkout.session.completed') {
+            const session = event.data.object;
+            const discordId = session.metadata?.discord_id;
+            const eventId = session.metadata?.event_id;
+
+            if (!discordId || !eventId) {
+                return res.json({ status: 'missing data' });
+            }
+
+            console.log(`✅ Payment completed for Discord ID: ${discordId}`);
+            const success = await updatePaymentStatusInDb(discordId, eventId, 'paid');
+
+            if (success) {
+                try {
+                    const user = await discordClient.users.fetch(discordId);
+                    if (user) {
+                        await user.send(`イベント「${eventId}」への決済が完了しました！ご参加ありがとうございます。`);
+                    }
+                } catch (dmError) {
+                    console.error(`❌ Failed to send payment confirmation DM to ${discordId}:`, dmError);
+                }
+            }
+            res.json({ status: success ? 'success' : 'db update failed' });
+        } else {
+            res.json({ status: 'ignored' });
+        }
+    });
+
+    // --- Static Pages ---
+    app.get('/dashboard', (req, res) => res.sendFile('index.html', { root: 'public' }));
+    app.get('/success', (req, res) => res.send('<h1>Payment Successful!</h1><p>Thank you!</p>'));
+    app.get('/cancel', (req, res) => res.send('<h1>決済がキャンセルされました。</h1>'));
+
+    app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
+};
+
+main().catch(console.error);
