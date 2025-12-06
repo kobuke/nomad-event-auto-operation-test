@@ -36,7 +36,7 @@ const updatePaymentStatusInDb = async (discordId, eventId, paymentStatus) => {
     const eventName = eventExistsRes.rows[0].name;
 
     const updatePaymentRes = await query(
-      `UPDATE payments SET status = $1, paid_at = CASE WHEN $1 = 'paid' THEN NOW() ELSE paid_at END WHERE user_id = $2 AND event_id = $3`,
+      `UPDATE payments SET status = $1, paid_at = CASE WHEN $1::payment_status = 'paid'::payment_status THEN NOW() ELSE paid_at END WHERE user_id = $2 AND event_id = $3`,
       [paymentStatus, userId, eventId]
     );
     if (updatePaymentRes.rowCount === 0 && paymentStatus === 'paid') {
