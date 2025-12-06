@@ -1,192 +1,207 @@
 
 import { Client, GatewayIntentBits, Partials } from 'discord.js';
-import { getSheetData, updateSheet, getEventDetailsFromSheet, updatePaymentStatusInSheet, updateCell } from './googleSheetHandler.js';
-import dotenv from 'dotenv';
+import { query } from './db.js';
+import getSettings, { loadSettings } from './settings.js';
 import stripe from 'stripe';
 
-dotenv.config();
+const main = async () => {
+    await loadSettings();
+    const settings = getSettings();
 
-const stripeClient = new stripe(process.env.STRIPE_SECRET_KEY);
+    const stripeClient = new stripe(settings.STRIPE_SECRET_KEY);
+    const GUILD_ID = settings.DISCORD_GUILD_ID;
 
-const client = new Client({
-  intents: [
-    GatewayIntentBits.Guilds,
-    GatewayIntentBits.GuildMessages,
-    GatewayIntentBits.GuildMessageReactions,
-    GatewayIntentBits.DirectMessages,
-  ],
-  partials: [Partials.Message, Partials.Channel, Partials.Reaction],
-});
+    if (!GUILD_ID) {
+      console.error('❌ DISCORD_GUILD_ID is not set in settings.');
+    }
 
-const updateRsvpSheet = async (reaction, user, add) => {
-  try {
-    const events = await getSheetData('Event Setting');
-    const event = events.find(row => row[2] === reaction.message.id);
-    console.log(`[DEBUG] Found event based on message ID: ${event ? event[0] : 'None'}`);
+    const client = new Client({
+      intents: [
+        GatewayIntentBits.Guilds,
+        GatewayIntentBits.GuildMembers,
+        GatewayIntentBits.GuildMessages,
+        GatewayIntentBits.GuildMessageReactions,
+        GatewayIntentBits.DirectMessages,
+      ],
+      partials: [Partials.Message, Partials.Channel, Partials.Reaction],
+    });
 
-    if (!event) return;
+    /**
+     * Handles database operations for a reaction add/remove.
+     */
+    const handleRsvpReaction = async (reaction, user, add) => {
+      try {
+        const eventRes = await query('SELECT * FROM events WHERE discord_message_id = $1', [reaction.message.id]);
+        if (eventRes.rows.length === 0) return;
+        const event = eventRes.rows[0];
 
-    const customEmoji = event[3]; // Column D for the reaction emoji
-    console.log(`[DEBUG] Custom emoji for event: ${customEmoji}`);
+        // Strip skin tone modifiers from emojis for comparison
+        const skinToneRegex = /[\u{1F3FB}-\u{1F3FF}]/gu;
+        const baseReactionEmoji = reaction.emoji.name.replace(skinToneRegex, '');
+        const baseEventEmoji = event.reaction_emoji.replace(skinToneRegex, '');
 
-    const eventName = event[0];
-    const rsvpData = await getSheetData('RSVP');
-    const userNames = rsvpData.map(row => row[0]);
-    const eventNames = rsvpData[0];
-    console.log("rsvpData: " + rsvpData);
+        if (baseReactionEmoji !== baseEventEmoji) return;
 
-    const userIndex = userNames.indexOf(user.username);
-    const eventIndex = eventNames.indexOf(eventName);
-    console.log(`[DEBUG] User: ${user.username}, User Index: ${userIndex}, Event: ${eventName}, Event Index: ${eventIndex}`);
-
-    if (userIndex === -1 || eventIndex === -1) return;
-
-    const newRsvpData = rsvpData.map(row => [...row]);
-    console.log("newRsvpData:" + newRsvpData);
-
-    if (add) {
-      if (!newRsvpData[userIndex][eventIndex]) {
-        newRsvpData[userIndex][eventIndex] = new Date().toLocaleString('ja-JP', { timeZone: 'Asia/Tokyo' });
-      }
-
-      // Stripe integration
-      console.log(`[DEBUG] Reaction emoji: ${reaction.emoji.name}, Expected custom emoji: ${customEmoji}`);
-      if (reaction.emoji.name === event[3]) {
-        const eventDetails = await getEventDetailsFromSheet(eventName);
-        if (eventDetails && eventDetails.fee > 0) {
-          // Check payment status before sending a new Stripe link
-          const paymentsSheetName = 'Payments';
-          const paymentData = await getSheetData(paymentsSheetName);
-          const paymentHeader = paymentData[0];
-          const eventColumnIndex = paymentHeader.indexOf(eventName);
-          // Assuming Discord ID is in the first column (index 0) of the 'Payments' sheet
-          const discordIdColumnIndex = 0; 
-          const userPaymentRow = paymentData.find(row => row[discordIdColumnIndex] === user.username);
-          
-          let currentPaymentStatus = '';
-          if (userPaymentRow && eventColumnIndex > -1) {
-            currentPaymentStatus = userPaymentRow[eventColumnIndex];
-          }
-
-          if (currentPaymentStatus === 'DM Sent' || currentPaymentStatus === 'Done') {
-            console.log(`✅ Payment DM for ${eventName} already sent or completed for ${user.username}. Skipping.`);
-          } else {
-            try {
-              const session = await stripeClient.checkout.sessions.create({
-                payment_method_types: ['card'],
-                line_items: [
-                  {
-                    price_data: {
-                      currency: 'jpy',
-                      product_data: {
-                        name: eventDetails.title,
-                      },
-                      unit_amount: eventDetails.fee,
-                    },
-                    quantity: 1,
-                  },
-                ],
-                mode: 'payment',
-                success_url: `https://${process.env.RAILWAY_PUBLIC_DOMAIN}/success?session_id={CHECKOUT_SESSION_ID}`,
-                cancel_url: `https://${process.env.RAILWAY_PUBLIC_DOMAIN}/cancel`,
-                metadata: {
-                  discord_id: user.id,
-                  event_id: eventName,
-                },
-              });
-
-              const dmChannel = await user.createDM();
-              await dmChannel.send(
-                `--------------\n**【${eventName}】**\n\n🎉 Hello ${user.username}! This is an automated message from Nomad Event Bot. 🎉\n` +
-                `Thank you for showing interest in **${eventName}**! We're so excited to have you.\n` +
-                `Please complete your payment here:\n👉[Payment Link](${session.url})\n` +
-                `If you have any questions, feel free to ask! 😊\n--------------`
-              );
-              console.log(`✅ Sent Stripe checkout link to ${user.username}`);
-              await updatePaymentStatusInSheet(user.id, eventName, 'DM Sent');
-            } catch (stripeError) {
-              console.error(`❌ Failed to create Stripe checkout session or send DM:`, stripeError);
-            }
-          }
+        let userRes = await query('SELECT id FROM users WHERE discord_user_id = $1', [user.id]);
+        let dbUserId;
+        if (userRes.rows.length === 0) {
+          const newUserRes = await query(
+            'INSERT INTO users (discord_user_id, username, display_name) VALUES ($1, $2, $3) RETURNING id',
+            [user.id, user.username, user.displayName]
+          );
+          dbUserId = newUserRes.rows[0].id;
+        } else {
+          dbUserId = userRes.rows[0].id;
         }
+
+        if (add) {
+          await query(
+            `INSERT INTO rsvps (user_id, event_id, status, source, rsvp_at) 
+             VALUES ($1, $2, 'going', 'reaction', NOW()) 
+             ON CONFLICT (user_id, event_id) 
+             DO UPDATE SET status = 'going', rsvp_at = NOW(), updated_at = NOW()`,
+            [dbUserId, event.id]
+          );
+          
+          if (event.price_jpy > 0 || settings.SEND_DM_FOR_ZERO_PAYMENT_TEST) {
+            const session = await stripeClient.checkout.sessions.create({
+              payment_method_types: ['card'],
+              line_items: [{
+                price_data: {
+                  currency: 'jpy',
+                  product_data: { name: event.name },
+                  unit_amount: event.price_jpy,
+                },
+                quantity: 1,
+              }],
+              mode: 'payment',
+              success_url: `https://${settings.RAILWAY_PUBLIC_DOMAIN}/success`,
+              cancel_url: `https://${settings.RAILWAY_PUBLIC_DOMAIN}/cancel`,
+              metadata: { discord_id: user.id, event_id: event.id },
+            });
+
+            await query(
+              `INSERT INTO payments (user_id, event_id, status, amount_jpy, payment_link_url, dm_sent_at) 
+               VALUES ($1, $2, 'dm_sent', $3, $4, NOW()) 
+               ON CONFLICT (user_id, event_id) 
+               DO UPDATE SET status = 'dm_sent', payment_link_url = $4, dm_sent_at = NOW(), updated_at = NOW()`,
+              [dbUserId, event.id, event.price_jpy, session.url]
+            );
+
+            await user.send(
+              `Hello ${user.username}!\n\n` +
+              `Here is the payment page for the event "${event.name}":\n${session.url}\n\n` +
+              `This payment link expires in 24 hours.`
+            );
+            console.log(`✅ Sent Stripe checkout link to ${user.username} for ${event.name}`);
+          }
+        } else { // Reaction Remove
+          await query("UPDATE rsvps SET status = 'cancelled', cancelled_at = NOW() WHERE user_id = $1 AND event_id = $2", [dbUserId, event.id]);
+          await query("UPDATE payments SET status = 'cancelled', cancelled_at = NOW() WHERE user_id = $1 AND event_id = $2", [dbUserId, event.id]);
+          console.log(`✅ Cancelled RSVP for ${user.username} for event ${event.name}`);
+        }
+
+        await checkCapacity(reaction.message.channel, event);
+      } catch (error) {
+        console.error('❌ Failed to handle RSVP reaction:', error);
       }
+    };
 
-    } else {
-      newRsvpData[userIndex][eventIndex] = '';
-    }
+    /**
+     * Checks event capacity and sends notifications if needed.
+     */
+    const checkCapacity = async (channel, event) => {
+        if (!event.max_capacity || event.max_capacity <= 0) return;
+        const rsvpCountRes = await query("SELECT COUNT(*) FROM rsvps WHERE event_id = $1 AND status = 'going'", [event.id]);
+        const currentParticipants = parseInt(rsvpCountRes.rows[0].count, 10);
+        const noticeSent = event.mc_required; 
 
-    await updateSheet('RSVP', newRsvpData);
-    console.log(`✅ RSVP sheet updated for ${user.username} - Event: ${eventName}`);
-
-    // Capacity management
-    const eventSettingHeader = events[0];
-    const maxCapColumnIndex = eventSettingHeader.indexOf('Max Cap');
-    const mcColumnIndex = eventSettingHeader.indexOf('MC');
-
-    if (maxCapColumnIndex === -1 || mcColumnIndex === -1) {
-      console.error('❌ Missing Max Cap or MC column in Event Setting sheet.');
-      return;
-    }
-
-    const eventRowIndex = events.findIndex(row => row[0] === eventName);
-    if (eventRowIndex === -1) return;
-
-    const maxCap = parseInt(event[maxCapColumnIndex], 10);
-    const mcStatus = event[mcColumnIndex];
-
-    // Fetch reactions to ensure up-to-date count
-    const threadId = event[1]; // Assuming Thread ID is in Column B
-    const channel = await client.channels.fetch(threadId);
-    const message = await channel.messages.fetch(reaction.message.id);
-    // For standard emojis, name is the identifier. For custom, id is the identifier.
-    const emojiIdentifier = reaction.emoji.id || reaction.emoji.name;
-    const reactionManager = message.reactions.cache;
-    const specificReaction = reactionManager.get(emojiIdentifier);
-    const currentParticipants = specificReaction ? specificReaction.count : 0;
-
-    console.log("現在のRSVPの数は：" + currentParticipants);
-
-    if (maxCap > 0) {
-      if (currentParticipants >= maxCap && mcStatus !== '✅') {
-        if (channel) {
+        if (currentParticipants >= event.max_capacity && !noticeSent) {
           await channel.send(
-            `🎉 **Heads up! ${eventName} has reached its maximum capacity of ${maxCap} participants!** 🎉\n` +
+            `🎉 **Heads up! ${event.name} has reached its maximum capacity of ${event.max_capacity} participants!** 🎉\n` +
             `We're so excited by the overwhelming interest! If a spot opens up, we'll let you know! ✨`
           );
-          console.log(`✅ Sent capacity reached message for event: ${eventName}`);
-          await updateCell('Event Setting', eventRowIndex, mcColumnIndex, '✅');
-        }
-      } else if (currentParticipants < maxCap && mcStatus === '✅') {
-        if (channel) {
+          await query("UPDATE events SET mc_required = TRUE WHERE id = $1", [event.id]);
+          console.log(`✅ Sent capacity reached message for event: ${event.name}`);
+        } else if (currentParticipants < event.max_capacity && noticeSent) {
           await channel.send(
-            `🔔 **Good news! A spot has opened up for ${eventName}!** 🔔\n` +
+            `🔔 **Good news! A spot has opened up for ${event.name}!** 🔔\n` +
             `There's still a chance to join! Don't miss out! 🚀`
           );
-          console.log(`✅ Sent capacity available message for event: ${eventName}`);
-          await updateCell('Event Setting', eventRowIndex, mcColumnIndex, '');
+          await query("UPDATE events SET mc_required = FALSE WHERE id = $1", [event.id]);
+          console.log(`✅ Sent capacity available message for event: ${event.name}`);
         }
+    }
+
+    /**
+     * Syncs all members of the guild with the users table.
+     */
+    const syncAllUsers = async () => {
+      if (!GUILD_ID) {
+        console.warn('⚠️ DISCORD_GUILD_ID not set. Skipping user sync.');
+        return;
+      }
+      try {
+        const guild = await client.guilds.fetch(GUILD_ID);
+        const members = await guild.members.fetch();
+        console.log(`Syncing ${members.size} members to the database...`);
+        for (const member of members.values()) {
+            if (member.user.bot) continue;
+            await query(
+                `INSERT INTO users (discord_user_id, username, display_name) 
+                 VALUES ($1, $2, $3) 
+                 ON CONFLICT (discord_user_id) 
+                 DO UPDATE SET username = $2, display_name = $3, role = CASE WHEN users.role = 'Left' THEN NULL ELSE users.role END`,
+[member.id, member.user.username, member.user.displayName]
+            );
+        }
+        console.log('✅ User sync complete.');
+      } catch(error) {
+        console.error('❌ Failed to sync users:', error);
       }
     }
 
-  } catch (error) {
-    console.error('❌ Failed to update RSVP sheet:', error);
-  }
+    client.on('ready', async () => {
+      console.log(`Logged in as ${client.user.tag}!`);
+      await syncAllUsers();
+    });
+
+    client.on('guildMemberAdd', async (member) => {
+      if (member.user.bot) return;
+      console.log(`New user "${member.user.username}" has joined the server.`);
+      await query(
+        `INSERT INTO users (discord_user_id, username, display_name) 
+                  VALUES ($1, $2, $3)
+                  ON CONFLICT (discord_user_id)
+                  DO UPDATE SET username = $2, display_name = $3, role = NULL`,
+                 [member.id, member.user.username, member.user.displayName]      );
+    });
+
+    client.on('guildMemberRemove', async (member) => {
+      if (member.user.bot) return;
+      console.log(`User "${member.user.username}" has left the server.`);
+      await query("UPDATE users SET role = 'Left' WHERE discord_user_id = $1", [member.id]);
+    });
+
+    client.on('messageReactionAdd', async (reaction, user) => {
+      if (user.bot) return;
+      if (reaction.partial) await reaction.fetch();
+      if (user.partial) await user.fetch();
+      
+      console.log(`[DB] Reaction added: ${reaction.emoji.name} by ${user.tag}`);
+      await handleRsvpReaction(reaction, user, true);
+    });
+
+    client.on('messageReactionRemove', async (reaction, user) => {
+      if (user.bot) return;
+      if (reaction.partial) await reaction.fetch();
+      if (user.partial) await user.fetch();
+
+      console.log(`[DB] Reaction removed: ${reaction.emoji.name} by ${user.tag}`);
+      await handleRsvpReaction(reaction, user, false);
+    });
+
+    client.login(settings.DISCORD_BOT_TOKEN);
 };
 
-client.on('ready', () => {
-  console.log(`Logged in as ${client.user.tag}!`);
-});
-
-client.on('messageReactionAdd', async (reaction, user) => {
-  console.log(`[DEBUG] Reaction added: ${reaction.emoji.name} by ${user.tag}`);
-  if (user.bot) return;
-  await updateRsvpSheet(reaction, user, true);
-});
-
-client.on('messageReactionRemove', async (reaction, user) => {
-  console.log(`[DEBUG] Reaction removed: ${reaction.emoji.name} by ${user.tag}`);
-  if (user.bot) return;
-  await updateRsvpSheet(reaction, user, false);
-});
-
-client.login(process.env.DISCORD_BOT_TOKEN);
+main().catch(console.error);

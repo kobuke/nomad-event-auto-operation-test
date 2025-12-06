@@ -1,159 +1,81 @@
 
 import { Client, GatewayIntentBits } from 'discord.js';
-import { getSheetData, updateCell, updateSheet } from './googleSheetHandler.js';
-import dotenv from 'dotenv';
+import { query } from './db.js';
+import getSettings, { loadSettings } from './settings.js';
 
-dotenv.config();
+const main = async () => {
+    await loadSettings();
+    const settings = getSettings();
 
-const client = new Client({
-  intents: [
-    GatewayIntentBits.Guilds,
-    GatewayIntentBits.GuildMessages,
-    GatewayIntentBits.GuildMembers,
-  ],
-});
+    const client = new Client({
+        intents: [
+            GatewayIntentBits.Guilds,
+            GatewayIntentBits.GuildMessages,
+            GatewayIntentBits.GuildMembers,
+        ],
+    });
 
-client.on('ready', async () => {
-  console.log(`Logged in as ${client.user.tag}!`);
+    await client.login(settings.DISCORD_BOT_TOKEN);
+    console.log(`Logged in as ${client.user.tag}!`);
 
-  try {
-    console.log('[DEBUG] Starting user export to Users sheet...');
-    const guild = await client.guilds.fetch(process.env.DISCORD_GUILD_ID);
-    const channel = await guild.channels.fetch(process.env.DISCORD_CHANNEL_ID);
-    const members = await guild.members.fetch();
+    try {
+        const usersResult = await query('SELECT discord_user_id FROM users');
+        const allUserMentions = usersResult.rows
+            .map(user => `<@${user.discord_user_id}>`)
+            .join(' ');
+        console.log(`[DB] All user mentions prepared.`);
 
-    const channelMembers = members.filter(member => channel.permissionsFor(member).has('ViewChannel'));
+        const eventsResult = await query(`
+            SELECT id, name, discord_thread_id, deadline_at, remind1_at, remind2_at, deadline_notice_sent, remind1_sent, remind2_sent
+            FROM events
+            WHERE
+              (deadline_at IS NOT NULL AND deadline_at < NOW() AND (deadline_notice_sent IS NULL OR deadline_notice_sent = FALSE)) OR
+              (remind1_at IS NOT NULL AND remind1_at < NOW() AND (remind1_sent IS NULL OR remind1_sent = FALSE)) OR
+              (remind2_at IS NOT NULL AND remind2_at < NOW() AND (remind2_sent IS NULL OR remind2_sent = FALSE));
+        `);
 
-    const usersToExport = channelMembers.map(member => [member.user.username, member.user.id]);
+        const now = new Date();
 
-    // Add header row
-    const usersSheetData = [['userName', 'userId'], ...usersToExport];
+        for (const event of eventsResult.rows) {
+            console.log(`[DB] Processing event: ${event.name}`);
+            const channel = await client.channels.fetch(event.discord_thread_id).catch(() => null);
+            if (!channel) continue;
 
-    await updateSheet('Users', usersSheetData);
-    console.log(`✅ Successfully exported ${usersToExport.length} users to Google Sheets (Users sheet).`);
+            if (event.deadline_at && now > new Date(event.deadline_at) && !event.deadline_notice_sent) {
+                await channel.send(
+                    `${allUserMentions}\n📢 **Recruitment for ${event.name} has officially closed!** 📢\n` +
+                    `Thank you to everyone who showed interest and signed up! We're so excited for the event! ✨`
+                );
+                console.log(`✅ Sent deadline message for event: ${event.name}`);
+                await query('UPDATE events SET deadline_notice_sent = TRUE WHERE id = $1', [event.id]);
+            }
 
-    // Prepare mention string for all users
-    const allUsersData = await getSheetData('Users');
-    const allUserMentions = allUsersData.slice(1) // Skip header row
-                                        .map(row => `<@${row[1]}>`) // Assuming userId is in column B (index 1)
-                                        .join(' ');
-    console.log(`[DEBUG] All user mentions prepared: ${allUserMentions}`);
+            if (event.remind1_at && now > new Date(event.remind1_at) && !event.remind1_sent) {
+                await channel.send(
+                    `${allUserMentions}\n🔔 **Friendly Reminder** 🔔\n` +
+                    `Just a quick heads-up about ${event.name}.\n\nTo reserve a spot for an event, please react with a 👍 on **the pinned post!**`
+                );
+                console.log(`✅ Sent Reminder 1 message for event: ${event.name}`);
+                await query('UPDATE events SET remind1_sent = TRUE WHERE id = $1', [event.id]);
+            }
 
-    // Existing event processing logic starts here
-    const events = await getSheetData('Event Setting');
-    const header = events[0];
-    const eventNameColumnIndex = header.indexOf('Event Name');
-    const threadIdColumnIndex = header.indexOf('Thread ID');
-    const deadlineColumnIndex = header.indexOf('〆 Date');
-    const postedColumnIndex = header.indexOf('〆'); 
-    const remind1DateColumnIndex = header.indexOf('Remind1 Date');
-    const r1ColumnIndex = header.indexOf('R1');
-    const remind2DateColumnIndex = header.indexOf('Remind2 Date');
-    const r2ColumnIndex = header.indexOf('R2');
-
-    if (eventNameColumnIndex === -1 || threadIdColumnIndex === -1 || deadlineColumnIndex === -1 || postedColumnIndex === -1 || remind1DateColumnIndex === -1 || r1ColumnIndex === -1 || remind2DateColumnIndex === -1 || r2ColumnIndex === -1) {
-      console.error('❌ Missing required columns in Event Setting sheet.');
-      client.destroy();
-      return;
+            if (event.remind2_at && now > new Date(event.remind2_at) && !event.remind2_sent) {
+                await channel.send(
+                    `${allUserMentions}\n⏰ **Last Chance Reminder** ⏰\n` +
+                    `This is your final reminder for ${event.name}.\n\nTo reserve a spot for an event, please react with a 👍 on **the pinned post!**`
+                );
+                console.log(`✅ Sent Reminder 2 message for event: ${event.name}`);
+                await query('UPDATE events SET remind2_sent = TRUE WHERE id = $1', [event.id]);
+            }
+        }
+    } catch (error) {
+        console.error('❌ Failed to check deadlines:', error);
+    } finally {
+        client.destroy();
     }
+};
 
-    const now = new Date();
+main().catch(console.error);
 
-    for (let i = 1; i < events.length; i++) { // Iterate from the second row (index 1)
-      const event = events[i];
-      const eventName = event[eventNameColumnIndex];
-      const threadId = event[threadIdColumnIndex];
-      const deadline = event[deadlineColumnIndex];
-      const posted = event[postedColumnIndex];
-      const remind1Date = event[remind1DateColumnIndex];
-      const r1Status = event[r1ColumnIndex];
-      const remind2Date = event[remind2DateColumnIndex];
-      const r2Status = event[r2ColumnIndex];
-
-      console.log(`[DEBUG] Processing event: ${eventName}`);
-      console.log(`[DEBUG] Raw Remind1 Date: ${remind1Date}, R1 Status: ${r1Status}`);
-      console.log(`[DEBUG] Raw Remind2 Date: ${remind2Date}, R2 Status: ${r2Status}`);
-      console.log(`[DEBUG] Current time: ${now}`);
-
-      // Deadline check
-      if (deadline && deadline !== '-' && posted !== '✅') {
-        const deadlineDate = new Date(`${now.getFullYear()}/${deadline} GMT+0800`);
-        console.log(`[DEBUG] Parsed Deadline Date: ${deadlineDate}, Comparison (now > deadlineDate): ${now > deadlineDate}`);
-
-        if (now > deadlineDate) {
-          try {
-            const channel = await client.channels.fetch(threadId);
-            if (channel) {
-              await channel.send(
-                `${allUserMentions}\n📢 **Recruitment for ${eventName} has officially closed!** 📢\n` +
-                `Thank you to everyone who showed interest and signed up! We're so excited for the event! ✨`
-              );
-              console.log(`✅ Sent deadline message for event: ${eventName}`);
-              await updateCell('Event Setting', i, postedColumnIndex, '✅');
-            } else {
-              console.error(`❌ Discord thread not found: ${threadId}`);
-            }
-          } catch (discordError) {
-            console.error(`❌ Failed to send deadline message for event ${eventName}:`, discordError);
-          }
-        }
-      }
-
-      // Reminder 1 check
-      if (remind1Date && remind1Date !== '-' && r1Status !== '✅') {
-        const remind1DateTime = new Date(`${now.getFullYear()}/${remind1Date} GMT+0800`);
-        console.log(`[DEBUG] Parsed Remind1 Date: ${remind1DateTime}, Comparison (now > remind1DateTime): ${now > remind1DateTime}`);
-
-        if (now > remind1DateTime) {
-          try {
-            const channel = await client.channels.fetch(threadId);
-            if (channel) {
-              await channel.send(
-                `${allUserMentions}\n🔔 **Friendly Reminder: ${eventName} is coming up soon!** 🔔\n` +
-                `Just a quick heads-up about ${eventName}. Don't miss out! ✨`
-              );
-              console.log(`✅ Sent Reminder 1 message for event: ${eventName}`);
-              await updateCell('Event Setting', i, r1ColumnIndex, '✅');
-            } else {
-              console.error(`❌ Discord thread not found: ${threadId}`);
-            }
-          } catch (discordError) {
-            console.error(`❌ Failed to send Reminder 1 message for event ${eventName}:`, discordError);
-          }
-        }
-      }
-
-      // Reminder 2 check
-      if (remind2Date && remind2Date !== '-' && r2Status !== '✅') {
-        const remind2DateTime = new Date(`${now.getFullYear()}/${remind2Date} GMT+0800`);
-        console.log(`[DEBUG] Parsed Remind2 Date: ${remind2DateTime}, Comparison (now > remind2DateTime): ${now > remind2DateTime}`);
-
-        if (now > remind2DateTime) {
-          try {
-            const channel = await client.channels.fetch(threadId);
-            if (channel) {
-              await channel.send(
-                `${allUserMentions}\n⏰ **Last Chance Reminder: ${eventName} is almost here!** ⏰\n` +
-                `This is your final reminder for ${eventName}. Get ready! 🚀`
-              );
-              console.log(`✅ Sent Reminder 2 message for event: ${eventName}`);
-              await updateCell('Event Setting', i, r2ColumnIndex, '✅');
-            } else {
-              console.error(`❌ Discord thread not found: ${threadId}`);
-            }
-          }
-          catch (discordError) {
-              console.error(`❌ Failed to send Reminder 2 message for event ${eventName}:`, discordError);
-          }
-        }
-      }
-    }
-    
-  } catch (error) {
-    console.error('❌ Failed to check deadlines:', error);
-  } finally {
-    client.destroy();
-  }
-});
-
-client.login(process.env.DISCORD_BOT_TOKEN);
+// Original function export is no longer needed as this is a standalone script
+// export const checkDeadlines = main;

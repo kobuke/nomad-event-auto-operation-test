@@ -1,0 +1,105 @@
+body {
+    background-color: #f8f9fa;
+}
+
+.navbar {
+    box-shadow: 0 2px 4px rgba(0,0,0,.1);
+}
+
+.nav-link {
+    transition: color .2s;
+}
+
+.nav-link.active {
+    font-weight: bold;
+}
+
+#content-area {
+    background-color: #ffffff;
+    padding: 2rem;
+    border-radius: 0.5rem;
+    box-shadow: 0 2px 10px rgba(0,0,0,.075);
+}
+
+.table {
+    border-collapse: separate;
+    border-spacing: 0 0.5rem;
+}
+
+.table th {
+    font-weight: 600;
+}
+
+.table td, .table th {
+    vertical-align: middle;
+}
+
+.btn-primary {
+    background-color: #0d6efd;
+    border-color: #0d6efd;
+}
+
+.modal-header {
+    background-color: #f1f3f5;
+}
+
+/* Custom gradient classes for event cards */
+.card-gradient-blue-cyan {
+    background: linear-gradient(to bottom right, #3B82F6, #06B6D4); /* from-blue-500 to-cyan-400 */
+}
+.card-gradient-emerald-teal {
+    background: linear-gradient(to bottom right, #10B981, #20C8A0); /* from-emerald-500 to-teal-400 */
+}
+.card-gradient-purple-indigo {
+    background: linear-gradient(to bottom right, #A855F7, #6366F1); /* from-purple-500 to-indigo-500 */
+}
+.card-gradient-orange-pink {
+    background: linear-gradient(to bottom right, #FB923C, #EC4899); /* from-orange-400 to-pink-500 */
+}
+.card-gradient-red-yellow {
+    background: linear-gradient(to bottom right, #EF4444, #FACC15); /* from-red-500 to-yellow-500 */
+}
+.card-gradient-green-blue {
+    background: linear-gradient(to bottom right, #22C55E, #3B82F6); /* from-green-400 to-blue-600 */
+}
+
+/* Card hover effect */
+.card-hover-effect {
+    transition: transform 0.3s ease-in-out, box-shadow 0.3s ease-in-out;
+}
+.card-hover-effect:hover {
+    transform: translateY(-5px);
+    box-shadow: 0 10px 20px rgba(0, 0, 0, 0.15);
+}
+
+/* Floating emoji positioning */
+.emoji-float-top-right {
+    position: absolute;
+    top: 5rem; /* Adjust based on card-header height */
+    right: 1rem;
+    transform: translateY(-50%);
+}
+
+/* Thread ID text styling for better copyability */
+.thread-id-text {
+    user-select: all; /* Allows easy selection and copy */
+}
+
+/* Hover effects for clickable sections in event cards */
+.rsvps-section, .payments-section {
+    cursor: pointer;
+    transition: background-color 0.2s ease-in-out, box-shadow 0.2s ease-in-out;
+    border-radius: 0.25rem; /* Optional: subtle rounding */
+}
+
+.rsvps-section:hover, .payments-section:hover {
+    background-color: rgba(0, 0, 0, 0.05); /* Light gray background on hover */
+    box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.1); /* Subtle inner shadow */
+}
+
+/* Style for disabled (non-clickable) sections */
+.disabled-section {
+    cursor: default;
+    opacity: 0.6; 
+}
+
