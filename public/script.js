@@ -178,7 +178,7 @@ document.addEventListener('DOMContentLoaded', () => {
                                     ${event.remind2_at ? `<span class="badge bg-light text-secondary font-monospace d-flex align-items-center" title="Reminder 2"><span class="me-1">R2:</span> <span class="thread-id-text">${formatShortDate(event.remind2_at)}</span></span>` : ''}
                                 </div>
                                 <div class="d-flex flex-column align-items-end">
-                                    <span class="text-danger fw-medium d-flex align-items-center" title="Deadline">
+                                    <span class="text-xs text-danger fw-medium d-flex align-items-center" title="Deadline">
                                         <i class="bi bi-exclamation-circle-fill me-1"></i> 締切: ${formatShortDate(event.deadline_at)}
                                     </span>
                                 </div>
