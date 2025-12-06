@@ -94,14 +94,63 @@ const main = async () => {
     const PORT = process.env.PORT || 8080;
 
     app.use(express.static('public'));
-        app.use(bodyParser.json());
-        app.use(bodyParser.raw({ type: 'application/json' }));
     
         // Test route for debugging logging
         app.get('/test', (req, res) => {
             console.log('Server: /test route hit successfully.');
             res.send('Test route OK');
         });
+    
+        // --- Stripe Endpoints ---
+        // Apply raw body parser ONLY to the Stripe webhook endpoint to preserve the raw body for signature verification.
+        app.post('/stripe-webhook', bodyParser.raw({ type: 'application/json' }), async (req, res) => {
+            const sig = req.headers['stripe-signature'];
+            let event;
+            try {
+                event = stripeClient.webhooks.constructEvent(req.body, sig, settings.STRIPE_WEBHOOK_SECRET);
+                console.log(`[Stripe Webhook] Webhook received: ${event.type}`); // Keep this high-level log
+            } catch (err) {
+                console.log(`⚠️ [Stripe Webhook] Webhook signature verification failed:`, err.message);
+                return res.sendStatus(400);
+            }
+            if (event.type === 'checkout.session.completed') {
+                const session = event.data.object;
+                const discordId = session.metadata?.discord_id;
+                const eventId = session.metadata?.event_id;
+
+                if (!discordId || !eventId) {
+                    console.error(`❌ [Stripe Webhook] Missing discordId or eventId in metadata. Discord ID: ${discordId}, Event ID: ${eventId}`);
+                    return res.json({ status: 'missing data' });
+                }
+
+                const { success, eventName } = await updatePaymentStatusInDb(discordId, eventId, 'paid');
+
+                if (success) {
+                    try {
+                        const user = await discordClient.users.fetch(discordId);
+                        if (user && eventName) {
+                            await user.send(`Your payment for ${eventName} has been completed! Thank you for participating.`);
+                            console.log(`✅ [Stripe Webhook] Sent payment confirmation DM to ${user.username} for event ${eventName}.`);
+                        } else if (!user) {
+                            console.error(`❌ [Stripe Webhook] Failed to fetch Discord user object for Discord ID: ${discordId}. User object is null. DM not sent.`);
+                        } else { // !eventName
+                            console.error(`❌ [Stripe Webhook] Event name is null, cannot send DM. Discord ID: ${discordId}`);
+                        }
+                    } catch (dmError) {
+                        console.error(`❌ [Stripe Webhook] Failed to send payment confirmation DM to ${discordId}:`, dmError);
+                    }
+                } else {
+                    console.error(`❌ [Stripe Webhook] Payment status update failed in DB for Discord ID: ${discordId}, Event ID: ${eventId}. DM not sent.`);
+                }
+                res.json({ status: success ? 'success' : 'db update failed' });
+            } else {
+                console.log(`[Stripe Webhook] Event type ${event.type} ignored.`); // Keep this high-level log
+                res.json({ status: 'ignored' });
+            }
+        });
+
+        // Apply JSON body parser for all other API routes that expect JSON
+        app.use(bodyParser.json());
     
         // --- API Endpoints ---
         const V_TABLES = ['events', 'users', 'rsvps', 'payments']; // Valid tables for security
