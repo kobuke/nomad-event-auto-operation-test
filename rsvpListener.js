@@ -47,7 +47,7 @@ const main = async () => {
         if (userRes.rows.length === 0) {
           const newUserRes = await query(
             'INSERT INTO users (discord_user_id, username, display_name) VALUES ($1, $2, $3) RETURNING id',
-            [user.id, user.username, user.tag]
+            [user.id, user.username, user.displayName]
           );
           dbUserId = newUserRes.rows[0].id;
         } else {
@@ -63,7 +63,7 @@ const main = async () => {
             [dbUserId, event.id]
           );
           
-          if (event.price_jpy > 0) {
+          if (event.price_jpy > 0 || settings.SEND_DM_FOR_ZERO_PAYMENT_TEST) {
             const session = await stripeClient.checkout.sessions.create({
               payment_method_types: ['card'],
               line_items: [{
@@ -77,7 +77,7 @@ const main = async () => {
               mode: 'payment',
               success_url: `https://${settings.RAILWAY_PUBLIC_DOMAIN}/success`,
               cancel_url: `https://${settings.RAILWAY_PUBLIC_DOMAIN}/cancel`,
-              metadata: { discord_id: user.id, event_id: event.name },
+              metadata: { discord_id: user.id, event_id: event.id },
             });
 
             await query(
@@ -152,7 +152,7 @@ const main = async () => {
                  VALUES ($1, $2, $3) 
                  ON CONFLICT (discord_user_id) 
                  DO UPDATE SET username = $2, display_name = $3, role = CASE WHEN users.role = 'Left' THEN NULL ELSE users.role END`,
-                [member.id, member.user.username, member.user.tag]
+[member.id, member.user.username, member.user.displayName]
             );
         }
         console.log('✅ User sync complete.');
@@ -171,11 +171,10 @@ const main = async () => {
       console.log(`New user "${member.user.username}" has joined the server.`);
       await query(
         `INSERT INTO users (discord_user_id, username, display_name) 
-         VALUES ($1, $2, $3) 
-         ON CONFLICT (discord_user_id) 
-         DO UPDATE SET username = $2, display_name = $3, role = NULL`,
-        [member.id, member.user.username, member.user.tag]
-      );
+                  VALUES ($1, $2, $3)
+                  ON CONFLICT (discord_user_id)
+                  DO UPDATE SET username = $2, display_name = $3, role = NULL`,
+                 [member.id, member.user.username, member.user.displayName]      );
     });
 
     client.on('guildMemberRemove', async (member) => {

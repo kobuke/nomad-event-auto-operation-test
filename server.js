@@ -19,26 +19,30 @@ const getEventDetailsFromDb = async (eventName) => {
   }
 };
 
-const updatePaymentStatusInDb = async (discordId, eventName, paymentStatus) => {
+const updatePaymentStatusInDb = async (discordId, eventId, paymentStatus) => {
   try {
     const userRes = await query('SELECT id FROM users WHERE discord_user_id = $1', [discordId]);
     if (userRes.rows.length === 0) {
-      console.error(`User with Discord ID ${discordId} not found.`);
-      return false;
+      console.error(`[DB Helper] User with Discord ID ${discordId} not found in DB.`);
+      return { success: false, eventName: null };
     }
     const userId = userRes.rows[0].id;
 
-    const eventRes = await query('SELECT id FROM events WHERE name = $1', [eventName]);
-    if (eventRes.rows.length === 0) {
-      console.error(`Event with name ${eventName} not found.`);
-      return false;
+    const eventExistsRes = await query('SELECT id, name FROM events WHERE id = $1', [eventId]);
+    if (eventExistsRes.rows.length === 0) {
+      console.error(`[DB Helper] Event with ID ${eventId} not found in DB.`);
+      return { success: false, eventName: null };
     }
-    const eventId = eventRes.rows[0].id;
+    const eventName = eventExistsRes.rows[0].name;
 
-    await query(
+    const updatePaymentRes = await query(
       `UPDATE payments SET status = $1, paid_at = CASE WHEN $1 = 'paid' THEN NOW() ELSE paid_at END WHERE user_id = $2 AND event_id = $3`,
       [paymentStatus, userId, eventId]
     );
+    if (updatePaymentRes.rowCount === 0 && paymentStatus === 'paid') {
+        console.error(`[DB Helper] WARNING: No existing payment record found to update for User ID: ${userId}, Event ID: ${eventId}.`);
+    }
+
 
     if (paymentStatus === 'paid') {
       await query(
@@ -49,11 +53,11 @@ const updatePaymentStatusInDb = async (discordId, eventName, paymentStatus) => {
         [userId, eventId]
       );
     }
-    console.log(`✅ DB: Payment status updated to '${paymentStatus}' for user ${discordId} for event ${eventName}`);
-    return true;
+    console.log(`✅ [DB Helper] Payment status updated to '${paymentStatus}' for user ${discordId} for event ID ${eventId} (${eventName}).`);
+    return { success: true, eventName: eventName };
   } catch (error) {
-    console.error('Error updating payment status in DB:', error);
-    return false;
+    console.error(`❌ [DB Helper] Error in updatePaymentStatusInDb:`, error);
+    return { success: false, eventName: null };
   }
 };
 
@@ -106,8 +110,30 @@ const main = async () => {
         app.get('/api/settings', async (req, res) => {
             try {
                 console.log('Server: /api/settings route hit.');
-                const { rows } = await query('SELECT key, value, description FROM app_settings');
-                res.json(rows);
+                // 1. Fetch existing settings from DB
+                const dbSettingsRes = await query('SELECT key, value, description FROM app_settings');
+                const dbSettingsMap = new Map(dbSettingsRes.rows.map(s => [s.key, s]));
+
+                // 2. Define our specific default setting
+                const zeroPaymentTestSetting = {
+                    key: 'SEND_DM_FOR_ZERO_PAYMENT_TEST',
+                    value: 'false', // Default as string for DB consistency
+                    description: 'イベント参加費が0円の場合でもStripeのPaymentリンクがDMで届くようにします (テスト用途)',
+                };
+
+                // 3. Add/override with default if not present in DB
+                if (!dbSettingsMap.has(zeroPaymentTestSetting.key)) {
+                    dbSettingsMap.set(zeroPaymentTestSetting.key, zeroPaymentTestSetting);
+                } else {
+                    // Ensure the description is consistent even if key exists in DB without it
+                    if (!dbSettingsMap.get(zeroPaymentTestSetting.key).description) {
+                        dbSettingsMap.get(zeroPaymentTestSetting.key).description = zeroPaymentTestSetting.description;
+                    }
+                }
+                
+                // 4. Convert map values to array for response
+                res.json(Array.from(dbSettingsMap.values()));
+
             } catch (error) {
                 console.error('Server API: Error fetching settings (from specific route):', error);
                 res.status(500).json({ error: 'Failed to fetch settings' });
@@ -119,12 +145,21 @@ const main = async () => {
             if (!key || typeof value === 'undefined') {
                 return res.status(400).json({ error: 'Missing key or value' });
             }
+
+            // Get the description for the setting if it's our test setting
+            const description = key === 'SEND_DM_FOR_ZERO_PAYMENT_TEST' ? 'イベント参加費が0円の場合でもStripeのPaymentリンクがDMで届くようにします (テスト用途)' : '';
+
             try {
-                await query('UPDATE app_settings SET value = $1, updated_at = NOW() WHERE key = $2', [value, key]);
+                await query(
+                    `INSERT INTO app_settings (key, value, description, updated_at)
+                     VALUES ($1, $2, $3, NOW())
+                     ON CONFLICT (key) DO UPDATE SET value = $2, description = $3, updated_at = NOW()`,
+                    [key, value, description]
+                );
                 await loadSettings(); // Reload settings in memory
                 res.json({ success: true, message: `Setting '${key}' updated.` });
             } catch (error) {
-                console.error(`Server API: Error updating setting ${key}:`, error);
+                console.error(`Server API: Error updating/inserting setting ${key}:`, error);
                 res.status(500).json({ error: `Failed to update setting ${key}`});
             }
         });
@@ -419,8 +454,9 @@ const main = async () => {
         let event;
         try {
             event = stripeClient.webhooks.constructEvent(req.body, sig, settings.STRIPE_WEBHOOK_SECRET);
+            console.log(`[Stripe Webhook] Webhook received: ${event.type}`); // Keep this high-level log
         } catch (err) {
-            console.log(`⚠️ Webhook signature verification failed.`, err.message);
+            console.log(`⚠️ [Stripe Webhook] Webhook signature verification failed:`, err.message);
             return res.sendStatus(400);
         }
         if (event.type === 'checkout.session.completed') {
@@ -429,24 +465,32 @@ const main = async () => {
             const eventId = session.metadata?.event_id;
 
             if (!discordId || !eventId) {
+                console.error(`❌ [Stripe Webhook] Missing discordId or eventId in metadata. Discord ID: ${discordId}, Event ID: ${eventId}`);
                 return res.json({ status: 'missing data' });
             }
 
-            console.log(`✅ Payment completed for Discord ID: ${discordId}`);
-            const success = await updatePaymentStatusInDb(discordId, eventId, 'paid');
+            const { success, eventName } = await updatePaymentStatusInDb(discordId, eventId, 'paid');
 
             if (success) {
                 try {
                     const user = await discordClient.users.fetch(discordId);
-                    if (user) {
-                        await user.send(`イベント「${eventId}」への決済が完了しました！ご参加ありがとうございます。`);
+                    if (user && eventName) {
+                        await user.send(`Your payment for ${eventName} has been completed! Thank you for participating.`);
+                        console.log(`✅ [Stripe Webhook] Sent payment confirmation DM to ${user.username} for event ${eventName}.`);
+                    } else if (!user) {
+                        console.error(`❌ [Stripe Webhook] Failed to fetch Discord user object for Discord ID: ${discordId}. User object is null. DM not sent.`);
+                    } else { // !eventName
+                        console.error(`❌ [Stripe Webhook] Event name is null, cannot send DM. Discord ID: ${discordId}`);
                     }
                 } catch (dmError) {
-                    console.error(`❌ Failed to send payment confirmation DM to ${discordId}:`, dmError);
+                    console.error(`❌ [Stripe Webhook] Failed to send payment confirmation DM to ${discordId}:`, dmError);
                 }
+            } else {
+                console.error(`❌ [Stripe Webhook] Payment status update failed in DB for Discord ID: ${discordId}, Event ID: ${eventId}. DM not sent.`);
             }
             res.json({ status: success ? 'success' : 'db update failed' });
         } else {
+            console.log(`[Stripe Webhook] Event type ${event.type} ignored.`); // Keep this high-level log
             res.json({ status: 'ignored' });
         }
     });

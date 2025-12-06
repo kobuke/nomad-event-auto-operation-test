@@ -109,7 +109,7 @@ document.addEventListener('DOMContentLoaded', () => {
                                 <tbody>
                                     ${userPayments.map(payment => `
                                         <tr>
-                                            <td>${payment.event_title || 'N/A'}</td>
+                                            <td>${payment.event_name || 'N/A'}</td>
                                             <td>¥${payment.amount_jpy ? payment.amount_jpy.toLocaleString() : '0'}</td>
                                             <td>${payment.status}</td>
                                             <td>${payment.paid_at ? new Date(payment.paid_at).toLocaleString() : (payment.dm_sent_at ? new Date(payment.dm_sent_at).toLocaleString() + ' (DM Sent)' : 'N/A')}</td>
@@ -260,7 +260,7 @@ document.addEventListener('DOMContentLoaded', () => {
                                     ${eventRsvps.map(rsvp => `
                                         <tr>
                                             <td>${rsvp.username}</td>
-                                            <td>${rsvp.display_name}</td>
+                                            <td>${rsvp.display_name || rsvp.username}</td>
                                             <td>${new Date(rsvp.rsvp_at).toLocaleString()}</td>
                                         </tr>
                                     `).join('')}
@@ -283,7 +283,36 @@ document.addEventListener('DOMContentLoaded', () => {
     };
 
     const renderSettings = (data) => {
-        contentArea.innerHTML = `<table class="table"><thead><tr><th>Key</th><th>Value</th><th>Description</th><th>Actions</th></tr></thead><tbody>${data.map(s => `<tr data-key="${s.key}"><td><code>${s.key}</code></td><td><input type="text" class="form-control" value="${s.value}"></td><td><small class="text-muted">${s.description || ''}</small></td><td><button class="btn btn-sm btn-success save-setting-btn">Save</button><button class="btn btn-sm btn-danger delete-setting-btn">Delete</button></td></tr>`).join('')}</tbody></table>`;
+        contentArea.innerHTML = `<table class="table"><thead><tr><th>Key</th><th>Value</th><th>Description</th><th>Actions</th></tr></thead><tbody>${data.map(s => {
+            let valueInputHtml;
+            const descriptionText = s.description || '';
+
+            if (s.key === 'SEND_DM_FOR_ZERO_PAYMENT_TEST') {
+                const isChecked = s.value === 'true' || s.value === true; // Handle both string and boolean from DB
+                valueInputHtml = `
+                    <div class="form-check form-check-inline">
+                        <input class="form-check-input" type="radio" name="${s.key}" id="${s.key}-true" value="true" ${isChecked ? 'checked' : ''}>
+                        <label class="form-check-label" for="${s.key}-true">有効 (Test Only)</label>
+                    </div>
+                    <div class="form-check form-check-inline">
+                        <input class="form-check-input" type="radio" name="${s.key}" id="${s.key}-false" value="false" ${!isChecked ? 'checked' : ''}>
+                        <label class="form-check-label" for="${s.key}-false">無効</label>
+                    </div>
+                `;
+            } else {
+                valueInputHtml = `<input type="text" class="form-control" value="${s.value}">`;
+            }
+
+            return `<tr data-key="${s.key}">
+                        <td><code>${s.key}</code></td>
+                        <td>${valueInputHtml}</td>
+                        <td><small class="text-muted">${descriptionText}</small></td>
+                        <td>
+                            <button class="btn btn-sm btn-success save-setting-btn">Save</button>
+                            <button class="btn btn-sm btn-danger delete-setting-btn">Delete</button>
+                        </td>
+                    </tr>`;
+        }).join('')}</tbody></table>`;
     };
 
     // --- Helper Functions ---
@@ -413,7 +442,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 body.innerHTML = '<p class="text-muted text-center">No attendees (status: "going") found for this event.</p>';
                 return;
             }
-            body.innerHTML = `<table class="table table-striped"><thead><tr><th>Username</th><th>Display Name</th><th>RSVPed At</th></tr></thead><tbody>${attendees.map(a => `<tr><td>${a.username}</td><td>${a.display_name}</td><td>${new Date(a.rsvp_at).toLocaleString()}</td></tr>`).join('')}</tbody></table>`;
+            body.innerHTML = `<table class="table table-striped"><thead><tr><th>Username</th><th>Display Name</th><th>RSVPed At</th></tr></thead><tbody>${attendees.map(a => `<tr><td>${a.username}</td><td>${a.display_name || a.username}</td><td>${new Date(a.rsvp_at).toLocaleString()}</td></tr>`).join('')}</tbody></table>`;
         } catch (error) {
             body.innerHTML = `<div class="alert alert-danger">${error.message}</div>`;
         }
@@ -529,7 +558,16 @@ document.addEventListener('DOMContentLoaded', () => {
         if (e.target.classList.contains('delete-btn')) handleDelete(e.target.dataset.id);
         if (e.target.classList.contains('save-setting-btn')) {
             const row = e.target.closest('tr');
-            handleSaveSetting(row.dataset.key, row.querySelector('input').value);
+            const key = row.dataset.key;
+            let value;
+            if (key === 'SEND_DM_FOR_ZERO_PAYMENT_TEST') {
+                // Find the checked radio button within this row
+                const checkedRadio = row.querySelector(`input[name="${key}"]:checked`);
+                value = checkedRadio ? checkedRadio.value : 'false'; // Default to false if nothing checked (shouldn't happen with radios)
+            } else {
+                value = row.querySelector('input').value;
+            }
+            handleSaveSetting(key, value);
         }
         if (e.target.classList.contains('delete-setting-btn')) handleDeleteSetting(e.target.closest('tr').dataset.key);
     });

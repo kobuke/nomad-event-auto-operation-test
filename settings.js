@@ -18,6 +18,14 @@ export const loadSettings = async () => {
             return acc;
         }, {});
 
+        // Define default settings and merge with DB settings
+        const defaultAppSettings = {
+            SEND_DM_FOR_ZERO_PAYMENT_TEST: false, // New test setting, default to false
+            // Add other default app settings here if any
+        };
+
+        const mergedAppSettings = { ...defaultAppSettings, ...dbSettings };
+
         const secrets = {
             DISCORD_BOT_TOKEN: process.env.DISCORD_BOT_TOKEN,
             STRIPE_SECRET_KEY: process.env.STRIPE_SECRET_KEY,
@@ -27,14 +35,14 @@ export const loadSettings = async () => {
             GOOGLE_SERVICE_ACCOUNT_EMAIL: process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL,
         };
 
-        settings = { ...dbSettings, ...secrets };
+        // Final settings are merged app settings and secrets
+        settings = { ...mergedAppSettings, ...secrets };
         console.log('✅ Settings loaded successfully.');
 
     } catch (error) {
         console.error('❌ FATAL: Could not load settings from database. Please check DB connection.', error);
-        // In a real app, you might want to exit if settings can't be loaded.
-        // For now, we'll proceed with env vars only as a fallback.
-        settings = { ...process.env };
+        // Fallback to process.env if DB connection fails, ensure our new setting is also there as default
+        settings = { ...process.env, SEND_DM_FOR_ZERO_PAYMENT_TEST: false }; // Fallback with default
     }
 };
 
