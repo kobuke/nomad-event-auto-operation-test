@@ -80,16 +80,15 @@ const main = async () => {
               mode: 'payment',
               success_url: `https://${settings.RAILWAY_PUBLIC_DOMAIN}/success`,
               cancel_url: `https://${settings.RAILWAY_PUBLIC_DOMAIN}/cancel`,
-              metadata: { discord_id: user.id, event_id: event.id },
+              metadata: { discord_id: user.id, event_id: event.id, event_name: event.name },
             });
 
-            console.log(`[DEBUG] Creating payment record with user_id: ${dbUserId}, event_id: ${event.id}`);
             await query(
-              `INSERT INTO payments (user_id, event_id, status, amount_jpy, payment_link_url, dm_sent_at) 
-               VALUES ($1, $2, 'dm_sent', $3, $4, NOW()) 
+              `INSERT INTO payments (user_id, event_id, status, amount_jpy, payment_link_url, stripe_session_id, dm_sent_at) 
+               VALUES ($1, $2, 'dm_sent', $3, $4, $5, NOW()) 
                ON CONFLICT (user_id, event_id) 
-               DO UPDATE SET status = 'dm_sent', payment_link_url = $4, dm_sent_at = NOW(), updated_at = NOW()`,
-              [dbUserId, event.id, event.price_jpy, session.url]
+               DO UPDATE SET status = 'dm_sent', payment_link_url = $4, stripe_session_id = $5, dm_sent_at = NOW(), updated_at = NOW()`,
+              [dbUserId, event.id, event.price_jpy, session.url, session.id]
             );
 
             await user.send(

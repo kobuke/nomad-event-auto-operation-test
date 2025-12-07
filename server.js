@@ -6,70 +6,6 @@ import { query } from './db.js';
 import { Client as DiscordClient, IntentsBitField } from 'discord.js';
 import getSettings, { loadSettings } from './settings.js';
 
-// --- Database Helper Functions ---
-
-const getEventDetailsFromDb = async (eventName) => {
-  try {
-    const res = await query('SELECT name, price_jpy FROM events WHERE name = $1', [eventName]);
-    if (res.rows.length === 0) return null;
-    return { title: res.rows[0].name, fee: res.rows[0].price_jpy };
-  } catch (error) {
-    console.error('Error getting event details from DB:', error);
-    return null;
-  }
-};
-
-const updatePaymentStatusInDb = async (discordId, eventId, paymentStatus) => {
-  console.log(`[DEBUG] Webhook trying to update payment status with discordId: ${discordId}, eventId: ${eventId}`);
-  try {
-    const userRes = await query('SELECT id FROM users WHERE discord_user_id = $1', [discordId]);
-    if (userRes.rows.length === 0) {
-      console.error(`[DB Helper] User with Discord ID ${discordId} not found in DB.`);
-      return { success: false, eventName: null };
-    }
-    const userId = userRes.rows[0].id;
-
-    const eventIdInt = parseInt(eventId, 10);
-    if (isNaN(eventIdInt)) {
-        console.error(`[DB Helper] Invalid Event ID format received from webhook: ${eventId}`);
-        return { success: false, eventName: null };
-    }
-
-    const eventExistsRes = await query('SELECT id, name FROM events WHERE id = $1', [eventIdInt]);
-    if (eventExistsRes.rows.length === 0) {
-      console.error(`[DB Helper] Event with ID ${eventIdInt} not found in DB.`);
-      return { success: false, eventName: null };
-    }
-    const eventName = eventExistsRes.rows[0].name;
-
-    console.log(`[DEBUG] Running UPDATE on payments with user_id: ${userId}, event_id: ${eventIdInt}`);
-    const updatePaymentRes = await query(
-      `UPDATE payments SET status = $1, paid_at = CASE WHEN $1::payment_status = 'paid'::payment_status THEN NOW() ELSE paid_at END WHERE user_id = $2 AND event_id = $3`,
-      [paymentStatus, userId, eventIdInt]
-    );
-    if (updatePaymentRes.rowCount === 0 && paymentStatus === 'paid') {
-        console.error(`[DB Helper] WARNING: No existing payment record found to update for User ID: ${userId}, Event ID: ${eventIdInt}.`);
-    }
-
-
-    if (paymentStatus === 'paid') {
-      await query(
-        `INSERT INTO rsvps (user_id, event_id, status, source)
-         VALUES ($1, $2, 'going', 'payment')
-         ON CONFLICT (user_id, event_id)
-         DO UPDATE SET status = 'going', updated_at = NOW()`,
-        [userId, eventIdInt]
-      );
-    }
-    console.log(`✅ [DB Helper] Payment status updated to '${paymentStatus}' for user ${discordId} for event ID ${eventIdInt} (${eventName}).`);
-    return { success: true, eventName: eventName };
-  } catch (error) {
-    console.error(`❌ [DB Helper] Error in updatePaymentStatusInDb:`, error);
-    return { success: false, eventName: null };
-  }
-};
-
-
 // --- Main Application ---
 
 const main = async () => {
@@ -103,60 +39,75 @@ const main = async () => {
 
     app.use(express.static('public'));
         app.use(bodyParser.json());
-        app.use(bodyParser.raw({ type: 'application/json' }));
-    
+        // Apply raw body parser ONLY to the Stripe webhook endpoint
+        app.post('/stripe-webhook', bodyParser.raw({type: 'application/json'}), async (req, res) => {
+            const sig = req.headers['stripe-signature'];
+            let event;
+
+            try {
+                event = stripeClient.webhooks.constructEvent(req.body, sig, settings.STRIPE_WEBHOOK_SECRET);
+                console.log(`[Stripe Webhook] Received event: ${event.type}`);
+            } catch (err) {
+                console.log(`⚠️ [Stripe Webhook] Signature verification failed:`, err.message);
+                return res.status(400).send(`Webhook Error: ${err.message}`);
+            }
+
+            if (event.type === 'checkout.session.completed') {
+                const session = event.data.object;
+                const sessionId = session.id;
+
+                try {
+                    // Use the session ID to find and update the payment record
+                    const updateResult = await query(
+                        `UPDATE payments SET status = 'paid', paid_at = NOW() WHERE stripe_session_id = $1 RETURNING user_id, event_id`,
+                        [sessionId]
+                    );
+
+                    if (updateResult.rowCount === 0) {
+                        console.error(`❌ [Stripe Webhook] No payment record found for session_id: ${sessionId}`);
+                        return res.status(404).json({ status: 'not found' });
+                    }
+
+                    console.log(`✅ Payment record updated for session_id: ${sessionId}`);
+                    
+                    const { user_id, event_id } = updateResult.rows[0];
+
+                    // Also update the rsvp status to 'going'
+                    await query(
+                        `INSERT INTO rsvps (user_id, event_id, status, source) VALUES ($1, $2, 'going', 'payment')
+                         ON CONFLICT (user_id, event_id) DO UPDATE SET status = 'going', updated_at = NOW()`,
+                        [user_id, event_id]
+                    );
+                     console.log(`✅ RSVP status updated for user_id: ${user_id}, event_id: ${event_id}`);
+
+                    // Send confirmation DM
+                    const discordId = session.metadata?.discord_id;
+                    const eventName = session.metadata?.event_name;
+                    
+                    if (discordId && eventName) {
+                        const user = await discordClient.users.fetch(discordId);
+                        await user.send(`Your payment for "${eventName}" has been completed! Thank you for participating.`);
+                        console.log(`✅ Sent payment confirmation DM to ${user.username} for event ${eventName}.`);
+                    } else {
+                         console.warn(`⚠️ [Stripe Webhook] Missing metadata for discordId or eventName for session_id: ${sessionId}. DM not sent.`);
+                    }
+
+                    res.json({ status: 'success' });
+
+                } catch (dbError) {
+                    console.error(`❌ [Stripe Webhook] Database error while processing session ${sessionId}:`, dbError);
+                    res.status(500).json({ status: 'database error' });
+                }
+            } else {
+                console.log(`[Stripe Webhook] Ignoring event type ${event.type}.`);
+                res.json({ status: 'ignored' });
+            }
+        });
+
         // Test route for debugging logging
         app.get('/test', (req, res) => {
             console.log('Server: /test route hit successfully.');
             res.send('Test route OK');
-        });
-    
-        // --- Stripe Endpoints ---
-        // Apply raw body parser ONLY to the Stripe webhook endpoint to preserve the raw body for signature verification.
-        app.post('/stripe-webhook', async (req, res) => {
-            const sig = req.headers['stripe-signature'];
-            let event;
-            try {
-                event = stripeClient.webhooks.constructEvent(req.body, sig, settings.STRIPE_WEBHOOK_SECRET);
-                console.log(`[Stripe Webhook] Webhook received: ${event.type}`); // Keep this high-level log
-            } catch (err) {
-                console.log(`⚠️ [Stripe Webhook] Webhook signature verification failed:`, err.message);
-                return res.sendStatus(400);
-            }
-            if (event.type === 'checkout.session.completed') {
-                const session = event.data.object;
-                const discordId = session.metadata?.discord_id;
-                const eventId = session.metadata?.event_id;
-
-                if (!discordId || !eventId) {
-                    console.error(`❌ [Stripe Webhook] Missing discordId or eventId in metadata. Discord ID: ${discordId}, Event ID: ${eventId}`);
-                    return res.json({ status: 'missing data' });
-                }
-
-                const { success, eventName } = await updatePaymentStatusInDb(discordId, eventId, 'paid');
-
-                if (success) {
-                    try {
-                        const user = await discordClient.users.fetch(discordId);
-                        if (user && eventName) {
-                            await user.send(`Your payment for ${eventName} has been completed! Thank you for participating.`);
-                            console.log(`✅ [Stripe Webhook] Sent payment confirmation DM to ${user.username} for event ${eventName}.`);
-                        } else if (!user) {
-                            console.error(`❌ [Stripe Webhook] Failed to fetch Discord user object for Discord ID: ${discordId}. User object is null. DM not sent.`);
-                        } else { // !eventName
-                            console.error(`❌ [Stripe Webhook] Event name is null, cannot send DM. Discord ID: ${discordId}`);
-                        }
-                    } catch (dmError) {
-                        console.error(`❌ [Stripe Webhook] Failed to send payment confirmation DM to ${discordId}:`, dmError);
-                    }
-                } else {
-                    console.error(`❌ [Stripe Webhook] Payment status update failed in DB for Discord ID: ${discordId}, Event ID: ${eventId}. DM not sent.`);
-                }
-                res.json({ status: success ? 'success' : 'db update failed' });
-            } else {
-                console.log(`[Stripe Webhook] Event type ${event.type} ignored.`); // Keep this high-level log
-                res.json({ status: 'ignored' });
-            }
         });
 
         // Apply JSON body parser for all other API routes that expect JSON
