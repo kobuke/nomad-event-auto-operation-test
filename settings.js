@@ -10,39 +10,28 @@ let settings = {};
  * This should be called once on application startup.
  */
 export const loadSettings = async () => {
-    console.log('⚙️  Loading settings from database...');
+    console.log('⚙️  Loading settings...');
+    let dbSettings = {};
     try {
         const { rows } = await query('SELECT key, value FROM app_settings');
-        const dbSettings = rows.reduce((acc, row) => {
-            acc[row.key] = row.value;
-            return acc;
-        }, {});
-
-        // Define default settings and merge with DB settings
-        const defaultAppSettings = {
-            SEND_DM_FOR_ZERO_PAYMENT_TEST: false, // New test setting, default to false
-            // Add other default app settings here if any
-        };
-
-        const mergedAppSettings = { ...defaultAppSettings, ...dbSettings };
-
-        const secrets = {
-            DISCORD_BOT_TOKEN: process.env.DISCORD_BOT_TOKEN,
-            STRIPE_SECRET_KEY: process.env.STRIPE_SECRET_KEY,
-            STRIPE_WEBHOOK_SECRET: process.env.STRIPE_WEBHOOK_SECRET,
-            DATABASE_URL: process.env.DATABASE_URL,
-            GOOGLE_PRIVATE_KEY: process.env.GOOGLE_PRIVATE_KEY,
-            GOOGLE_SERVICE_ACCOUNT_EMAIL: process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL,
-        };
-
-        // Final settings are merged app settings and secrets
-        settings = { ...mergedAppSettings, ...secrets };
-        console.log('✅ Settings loaded successfully.');
-
+        for (const row of rows) {
+            dbSettings[row.key] = row.value;
+        }
+        console.log('✅ Settings loaded from database.');
     } catch (error) {
-        console.error('❌ FATAL: Could not load settings from database. Please check DB connection.', error);
-        // Fallback to process.env if DB connection fails, ensure our new setting is also there as default
-        settings = { ...process.env, SEND_DM_FOR_ZERO_PAYMENT_TEST: false }; // Fallback with default
+        console.error('DB: Error loading settings from database:', error);
+        console.warn('⚠️ Could not load settings from database. Continuing with environment variables only.');
+    }
+
+    // Merge database settings with environment variables.
+    // Environment variables take precedence.
+    settings = { ...dbSettings, ...process.env };
+
+    console.log('✅ All settings loaded and merged.');
+
+    // Post-load checks for essential settings
+    if (!settings.DISCORD_GUILD_ID) {
+        console.error('❌ CRITICAL: DISCORD_GUILD_ID is not set in settings (DB or ENV).');
     }
 };
 
