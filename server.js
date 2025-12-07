@@ -28,19 +28,25 @@ const updatePaymentStatusInDb = async (discordId, eventId, paymentStatus) => {
     }
     const userId = userRes.rows[0].id;
 
-    const eventExistsRes = await query('SELECT id, name FROM events WHERE id = $1', [eventId]);
+    const eventIdInt = parseInt(eventId, 10);
+    if (isNaN(eventIdInt)) {
+        console.error(`[DB Helper] Invalid Event ID format received from webhook: ${eventId}`);
+        return { success: false, eventName: null };
+    }
+
+    const eventExistsRes = await query('SELECT id, name FROM events WHERE id = $1', [eventIdInt]);
     if (eventExistsRes.rows.length === 0) {
-      console.error(`[DB Helper] Event with ID ${eventId} not found in DB.`);
+      console.error(`[DB Helper] Event with ID ${eventIdInt} not found in DB.`);
       return { success: false, eventName: null };
     }
     const eventName = eventExistsRes.rows[0].name;
 
     const updatePaymentRes = await query(
       `UPDATE payments SET status = $1, paid_at = CASE WHEN $1::payment_status = 'paid'::payment_status THEN NOW() ELSE paid_at END WHERE user_id = $2 AND event_id = $3`,
-      [paymentStatus, userId, eventId]
+      [paymentStatus, userId, eventIdInt]
     );
     if (updatePaymentRes.rowCount === 0 && paymentStatus === 'paid') {
-        console.error(`[DB Helper] WARNING: No existing payment record found to update for User ID: ${userId}, Event ID: ${eventId}.`);
+        console.error(`[DB Helper] WARNING: No existing payment record found to update for User ID: ${userId}, Event ID: ${eventIdInt}.`);
     }
 
 
@@ -50,10 +56,10 @@ const updatePaymentStatusInDb = async (discordId, eventId, paymentStatus) => {
          VALUES ($1, $2, 'going', 'payment')
          ON CONFLICT (user_id, event_id)
          DO UPDATE SET status = 'going', updated_at = NOW()`,
-        [userId, eventId]
+        [userId, eventIdInt]
       );
     }
-    console.log(`✅ [DB Helper] Payment status updated to '${paymentStatus}' for user ${discordId} for event ID ${eventId} (${eventName}).`);
+    console.log(`✅ [DB Helper] Payment status updated to '${paymentStatus}' for user ${discordId} for event ID ${eventIdInt} (${eventName}).`);
     return { success: true, eventName: eventName };
   } catch (error) {
     console.error(`❌ [DB Helper] Error in updatePaymentStatusInDb:`, error);
@@ -333,7 +339,7 @@ const main = async () => {
                 events: 'SELECT * FROM events ORDER BY start_at DESC',
                 users: 'SELECT id, discord_user_id, username, display_name, role FROM users ORDER BY created_at DESC',
 'rsvps': `SELECT r.id, u.username, e.name as event_name, r.status, r.rsvp_at, r.cancelled_at FROM rsvps r JOIN users u ON r.user_id = u.id JOIN events e ON r.event_id = e.id ORDER BY r.created_at DESC`,
-                payments: `SELECT p.id, u.username, e.name as event_name, p.status, p.amount_jpy FROM payments p JOIN users u ON p.user_id = u.id JOIN events e ON p.event_id = e.id ORDER BY p.created_at DESC`,
+                payments: `SELECT p.id, u.username, e.name as event_name, p.status, p.amount_jpy, p.paid_at, p.dm_sent_at FROM payments p JOIN users u ON p.user_id = u.id JOIN events e ON p.event_id = e.id ORDER BY p.created_at DESC`,
             };
             try {
                 const { rows } = await query(queries[table]);
