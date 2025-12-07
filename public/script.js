@@ -389,7 +389,7 @@ document.addEventListener('DOMContentLoaded', () => {
                     </div>
                 `;
             } else if (field.data_type.includes('int')) {
-                 inputHtml = `<div class="mb-3">${label}<input type="number" class="form-control" name="${key}" value="${value || ''}"></div>`;
+                 inputHtml = `<div class="mb-3">${label}<input type="number" class="form-control" name="${key}" value="${value === 0 ? 0 : (value || '')}"></div>`;
             } else {
                  inputHtml = `<div class="mb-3">${label}<input type="text" class="form-control" name="${key}" value="${value || ''}"></div>`;
             }
