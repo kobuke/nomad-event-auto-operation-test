@@ -17,7 +17,7 @@ document.addEventListener('DOMContentLoaded', () => {
         currentView = viewName;
         const title = viewName.charAt(0).toUpperCase() + viewName.slice(1);
         tableTitle.textContent = title.replace(/_/g, ' ');
-        createNewBtn.style.display = ['settings', 'events'].includes(viewName) ? 'none' : 'block';
+        createNewBtn.style.display = ['events', 'settings'].includes(viewName) ? 'block' : 'none';
 
         try {
             let data;
