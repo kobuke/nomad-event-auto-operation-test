@@ -20,6 +20,7 @@ const getEventDetailsFromDb = async (eventName) => {
 };
 
 const updatePaymentStatusInDb = async (discordId, eventId, paymentStatus) => {
+  console.log(`[DEBUG] Webhook trying to update payment status with discordId: ${discordId}, eventId: ${eventId}`);
   try {
     const userRes = await query('SELECT id FROM users WHERE discord_user_id = $1', [discordId]);
     if (userRes.rows.length === 0) {
@@ -41,6 +42,7 @@ const updatePaymentStatusInDb = async (discordId, eventId, paymentStatus) => {
     }
     const eventName = eventExistsRes.rows[0].name;
 
+    console.log(`[DEBUG] Running UPDATE on payments with user_id: ${userId}, event_id: ${eventIdInt}`);
     const updatePaymentRes = await query(
       `UPDATE payments SET status = $1, paid_at = CASE WHEN $1::payment_status = 'paid'::payment_status THEN NOW() ELSE paid_at END WHERE user_id = $2 AND event_id = $3`,
       [paymentStatus, userId, eventIdInt]
@@ -562,7 +564,7 @@ const main = async () => {
 
     // --- Static Pages ---
     app.get('/dashboard', (req, res) => res.sendFile('index.html', { root: 'public' }));
-    app.get('/success', (req, res) => res.send('<h1>Payment Successful!</h1><p>Thank you!</p>'));
+    app.get('/success', (req, res) => res.sendFile('success.html', { root: 'public' }));
     app.get('/cancel', (req, res) => res.send('<h1>決済がキャンセルされました。</h1>'));
 
     app.listen(PORT, () => console.log(`Server running on port ${PORT}`));

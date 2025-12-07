@@ -83,6 +83,7 @@ const main = async () => {
               metadata: { discord_id: user.id, event_id: event.id },
             });
 
+            console.log(`[DEBUG] Creating payment record with user_id: ${dbUserId}, event_id: ${event.id}`);
             await query(
               `INSERT INTO payments (user_id, event_id, status, amount_jpy, payment_link_url, dm_sent_at) 
                VALUES ($1, $2, 'dm_sent', $3, $4, NOW()) 
