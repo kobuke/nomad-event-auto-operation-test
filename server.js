@@ -332,7 +332,7 @@ const main = async () => {
             const queries = {
                 events: 'SELECT * FROM events ORDER BY start_at DESC',
                 users: 'SELECT id, discord_user_id, username, display_name, role FROM users ORDER BY created_at DESC',
-                rsvps: `SELECT r.id, u.username, e.name as event_name, r.status, r.rsvp_at FROM rsvps r JOIN users u ON r.user_id = u.id JOIN events e ON r.event_id = e.id ORDER BY r.created_at DESC`,
+'rsvps': `SELECT r.id, u.username, e.name as event_name, r.status, r.rsvp_at, r.cancelled_at FROM rsvps r JOIN users u ON r.user_id = u.id JOIN events e ON r.event_id = e.id ORDER BY r.created_at DESC`,
                 payments: `SELECT p.id, u.username, e.name as event_name, p.status, p.amount_jpy FROM payments p JOIN users u ON p.user_id = u.id JOIN events e ON p.event_id = e.id ORDER BY p.created_at DESC`,
             };
             try {

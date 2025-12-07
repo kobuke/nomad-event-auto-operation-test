@@ -1,14 +1,10 @@
--- Drop existing tables to ensure a clean slate
+-- Drop existing objects to ensure a clean slate
 DROP TABLE IF EXISTS payments, rsvps, events, users, app_settings;
+DROP TYPE IF EXISTS payment_status;
 
 -- Create a shared ENUM type for payment statuses.
 -- This provides better data integrity than plain VARCHAR.
-DO $$
-BEGIN
-    IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'payment_status') THEN
-        CREATE TYPE payment_status AS ENUM ('pending', 'paid', 'failed', 'dm_sent');
-    END IF;
-END$$;
+CREATE TYPE payment_status AS ENUM ('pending', 'paid', 'failed', 'dm_sent', 'cancelled');
 
 
 -- app_settings table to store application-wide settings.
@@ -80,6 +76,7 @@ CREATE TABLE payments (
     payment_link_url TEXT,
     dm_sent_at TIMESTAMP WITH TIME ZONE,
     paid_at TIMESTAMP WITH TIME ZONE,
+    cancelled_at TIMESTAMP WITH TIME ZONE,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
     UNIQUE (user_id, event_id)

@@ -222,7 +222,7 @@ document.addEventListener('DOMContentLoaded', () => {
             return;
         }
 
-        // Group RSVPs by event_title
+        // Group RSVPs by event_name
         const rsvpsByEvent = rsvps.reduce((acc, rsvp) => {
             const eventTitle = rsvp.event_name;
             if (!acc[eventTitle]) {
@@ -253,7 +253,9 @@ document.addEventListener('DOMContentLoaded', () => {
                                     <tr>
                                         <th>Username</th>
                                         <th>Display Name</th>
+                                        <th>Status</th>
                                         <th>RSVPed At</th>
+                                        <th>Cancelled At</th>
                                     </tr>
                                 </thead>
                                 <tbody>
@@ -261,7 +263,9 @@ document.addEventListener('DOMContentLoaded', () => {
                                         <tr>
                                             <td>${rsvp.username}</td>
                                             <td>${rsvp.display_name || rsvp.username}</td>
+                                            <td><span class="badge ${rsvp.status === 'going' ? 'bg-success' : 'bg-secondary'}">${rsvp.status}</span></td>
                                             <td>${new Date(rsvp.rsvp_at).toLocaleString()}</td>
+                                            <td>${rsvp.cancelled_at ? new Date(rsvp.cancelled_at).toLocaleString() : '<span class="text-muted">N/A</span>'}</td>
                                         </tr>
                                     `).join('')}
                                 </tbody>
