@@ -76,6 +76,7 @@ CREATE TABLE payments (
     status payment_status NOT NULL,
     amount_jpy INTEGER,
     stripe_session_id VARCHAR(255),
+    payment_link_url TEXT,
     dm_sent_at TIMESTAMP WITH TIME ZONE,
     paid_at TIMESTAMP WITH TIME ZONE,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,

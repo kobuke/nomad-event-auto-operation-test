@@ -497,8 +497,8 @@ const main = async () => {
                     quantity: 1,
                 }],
                 mode: 'payment',
-                success_url: `https://${settings.RAILWAY_PUBLIC_DOMAIN}/success`,
-                cancel_url: `https://${settings.RAILWAY_PUBLIC_DOMAIN}/cancel`,
+                success_url: `https://${process.env.RAILWAY_PUBLIC_DOMAIN}/success`,
+                cancel_url: `https://${process.env.RAILWAY_PUBLIC_DOMAIN}/cancel`,
                 metadata: { discord_id: userId, event_id: eventId },
             });
             res.json({ url: session.url });
