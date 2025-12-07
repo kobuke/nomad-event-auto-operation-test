@@ -318,7 +318,7 @@ document.addEventListener('DOMContentLoaded', () => {
     // --- Helper Functions ---
     const generateEventColor = (eventId) => {
         const gradientClasses = ['card-gradient-blue-cyan', 'card-gradient-emerald-teal', 'card-gradient-purple-indigo', 'card-gradient-orange-pink', 'card-gradient-red-yellow', 'card-gradient-green-blue'];
-        const hash = eventId.split('').reduce((acc, char) => acc + char.charCodeAt(0), 0);
+        const hash = String(eventId).split('').reduce((acc, char) => acc + char.charCodeAt(0), 0);
         return gradientClasses[hash % gradientClasses.length];
     };
     const formatDateTimeString = (dateStr) => {
