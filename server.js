@@ -453,6 +453,14 @@ const main = async () => {
         if (!V_TABLES.includes(table)) return res.status(400).json({ error: 'Invalid table' });
         
         const fields = req.body;
+
+        // Convert boolean strings and, crucially, empty strings to null
+        for (const key in fields) {
+            if (fields[key] === 'true') fields[key] = true;
+            else if (fields[key] === 'false') fields[key] = false;
+            else if (fields[key] === '') fields[key] = null; 
+        }
+
         // Basic validation
         if (table === 'events' && !fields.name) {
             return res.status(400).json({ error: 'Event name is required' });
