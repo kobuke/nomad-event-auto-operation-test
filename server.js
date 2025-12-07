@@ -94,6 +94,8 @@ const main = async () => {
     const PORT = process.env.PORT || 8080;
 
     app.use(express.static('public'));
+        app.use(bodyParser.json());
+        app.use(bodyParser.raw({ type: 'application/json' }));
     
         // Test route for debugging logging
         app.get('/test', (req, res) => {
@@ -103,7 +105,7 @@ const main = async () => {
     
         // --- Stripe Endpoints ---
         // Apply raw body parser ONLY to the Stripe webhook endpoint to preserve the raw body for signature verification.
-        app.post('/stripe-webhook', bodyParser.raw({ type: 'application/json' }), async (req, res) => {
+        app.post('/stripe-webhook', async (req, res) => {
             const sig = req.headers['stripe-signature'];
             let event;
             try {
@@ -150,7 +152,7 @@ const main = async () => {
         });
 
         // Apply JSON body parser for all other API routes that expect JSON
-        app.use(bodyParser.json());
+
     
         // --- API Endpoints ---
         const V_TABLES = ['events', 'users', 'rsvps', 'payments']; // Valid tables for security
