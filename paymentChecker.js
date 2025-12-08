@@ -107,4 +107,4 @@ ${session.url}
     }
 };
 
-main().catch(console.error);
+export const checkUnsentPayments = main;
