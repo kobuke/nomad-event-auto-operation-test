@@ -195,7 +195,12 @@ const main = async () => {
         // Dashboard Events API
         app.get('/api/dashboard/events', async (req, res) => {
             try {
-                console.log('Server: /api/dashboard/events route hit.');
+                const { sort } = req.query;
+                // Validate sort parameter to prevent SQL injection
+                const sortOrder = sort?.toLowerCase() === 'asc' ? 'ASC' : 'DESC';
+
+                console.log(`Server: /api/dashboard/events route hit with sort=${sortOrder}.`);
+                
                 const { rows } = await query(`
                     SELECT
                         e.id,
@@ -220,7 +225,7 @@ const main = async () => {
                     GROUP BY
                         e.id
                     ORDER BY
-                        e.start_at DESC;
+                        e.start_at ${sortOrder};
                 `);
                 res.json(rows);
             } catch (error) {

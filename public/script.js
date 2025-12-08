@@ -4,6 +4,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const tableTitle = document.getElementById('table-title');
     const navLinks = document.querySelectorAll('.nav-link');
     const createNewBtn = document.getElementById('create-new-btn');
+    const sortEventsBtn = document.getElementById('sort-events-btn');
     const editForm = document.getElementById('edit-form');
     
     const editModal = new bootstrap.Modal(document.getElementById('editModal'));
@@ -11,6 +12,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const paymentsModal = new bootstrap.Modal(document.getElementById('paymentsModal'));
 
     let currentView = 'events';
+    let eventSortOrder = 'desc'; // 'desc' for newest first, 'asc' for oldest first
 
     // --- Data Loading & View Routing ---
     const loadView = async (viewName) => {
@@ -18,11 +20,12 @@ document.addEventListener('DOMContentLoaded', () => {
         const title = viewName.charAt(0).toUpperCase() + viewName.slice(1);
         tableTitle.textContent = title.replace(/_/g, ' ');
         createNewBtn.style.display = ['events', 'settings'].includes(viewName) ? 'block' : 'none';
+        sortEventsBtn.style.display = viewName === 'events' ? 'block' : 'none';
 
         try {
             let data;
             if (viewName === 'events') {
-                const response = await fetch(`/api/dashboard/events`);
+                const response = await fetch(`/api/dashboard/events?sort=${eventSortOrder}`);
                 if (!response.ok) {
                     const errorBody = await response.text();
                     throw new Error(`Failed to fetch dashboard events: ${response.status} ${response.statusText} - ${errorBody}`);
@@ -577,6 +580,12 @@ document.addEventListener('DOMContentLoaded', () => {
     });
 
     createNewBtn.addEventListener('click', handleCreate);
+
+    sortEventsBtn.addEventListener('click', () => {
+        eventSortOrder = eventSortOrder === 'desc' ? 'asc' : 'desc';
+        sortEventsBtn.textContent = eventSortOrder === 'desc' ? 'Sort: Newest First' : 'Sort: Oldest First';
+        loadView('events');
+    });
 
     document.getElementById('save-changes-btn').addEventListener('click', async () => {
         const id = editForm.dataset.id;
