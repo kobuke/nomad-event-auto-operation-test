@@ -100,44 +100,44 @@ const main = async () => {
         let event;
         try {
             event = stripeClient.webhooks.constructEvent(req.body, sig, settings.STRIPE_WEBHOOK_SECRET);
-            console.log(`[Stripe Webhook] Webhook received: ${event.type}`); // Keep this high-level log
+            console.log(`[Stripe Webhook] Webhook received and verified: ${event.type}`);
         } catch (err) {
             console.log(`⚠️ [Stripe Webhook] Webhook signature verification failed:`, err.message);
-            return res.sendStatus(400);
+            return res.status(400).send(`Webhook Error: ${err.message}`);
         }
+
+        // Acknowledge receipt of the event immediately to prevent timeouts
+        res.json({ received: true });
+
+        // Process the event asynchronously
         if (event.type === 'checkout.session.completed') {
             const session = event.data.object;
             const discordId = session.metadata?.discord_id;
             const eventId = session.metadata?.event_id;
 
             if (!discordId || !eventId) {
-                console.error(`❌ [Stripe Webhook] Missing discordId or eventId in metadata. Discord ID: ${discordId}, Event ID: ${eventId}`);
-                return res.json({ status: 'missing data' });
+                console.error(`❌ [Stripe Webhook] Ignored: Missing discordId or eventId in metadata.`);
+                return;
             }
 
-            const { success, eventName } = await updatePaymentStatusInDb(discordId, eventId, 'paid');
+            try {
+                const { success, eventName } = await updatePaymentStatusInDb(discordId, eventId, 'paid');
 
-            if (success) {
-                try {
+                if (success) {
                     const user = await discordClient.users.fetch(discordId);
                     if (user && eventName) {
-                        await user.send(`Your payment for ${eventName} has been completed! Thank you for participating.`);
+                        await user.send(`Your payment for "${eventName}" has been completed! Thank you for participating.`);
                         console.log(`✅ [Stripe Webhook] Sent payment confirmation DM to ${user.username} for event ${eventName}.`);
-                    } else if (!user) {
-                        console.error(`❌ [Stripe Webhook] Failed to fetch Discord user object for Discord ID: ${discordId}. User object is null. DM not sent.`);
-                    } else { // !eventName
-                        console.error(`❌ [Stripe Webhook] Event name is null, cannot send DM. Discord ID: ${discordId}`);
+                    } else {
+                         if (!user) console.error(`❌ [Stripe Webhook] Failed to fetch Discord user object for Discord ID: ${discordId}. User object is null. DM not sent.`);
+                         if (!eventName) console.error(`❌ [Stripe Webhook] Event name is null, cannot send DM. Discord ID: ${discordId}`);
                     }
-                } catch (dmError) {
-                    console.error(`❌ [Stripe Webhook] Failed to send payment confirmation DM to ${discordId}:`, dmError);
+                } else {
+                    console.error(`❌ [Stripe Webhook] Payment status update failed in DB for Discord ID: ${discordId}, Event ID: ${eventId}. DM not sent.`);
                 }
-            } else {
-                console.error(`❌ [Stripe Webhook] Payment status update failed in DB for Discord ID: ${discordId}, Event ID: ${eventId}. DM not sent.`);
+            } catch (processingError) {
+                console.error(`❌ [Stripe Webhook] Error processing webhook payload:`, processingError);
             }
-            res.json({ status: success ? 'success' : 'db update failed' });
-        } else {
-            console.log(`[Stripe Webhook] Event type ${event.type} ignored.`); // Keep this high-level log
-            res.json({ status: 'ignored' });
         }
     });
 

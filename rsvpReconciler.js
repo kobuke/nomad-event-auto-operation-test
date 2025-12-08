@@ -93,14 +93,22 @@ const main = async () => {
 
 
 
-                const rsvpResult = await query(
+                                const rsvpResult = await query(
 
-                    `SELECT u.discord_user_id FROM rsvps r 
 
-                     JOIN users u ON r.user_id = u.id 
 
-                     WHERE r.event_id = 
- AND r.status = 'going'`,
+                                    `SELECT u.discord_user_id FROM rsvps r 
+
+
+
+                                     JOIN users u ON r.user_id = u.id 
+
+
+
+                                     WHERE r.event_id = 
+
+
+                 AND r.status = 'going'`,
 
                     [event.id]
 
@@ -120,8 +128,7 @@ const main = async () => {
 
                         console.log(`[${event.name}] -- ❗️ Found missing RSVP for Discord user ${discordUserId}.`);
 
-                        const userResult = await query('SELECT id FROM users WHERE discord_user_id = 
-', [discordUserId]);
+                        const userResult = await query('SELECT id FROM users WHERE discord_user_id = $1', [discordUserId]);
 
                         if (userResult.rows.length > 0) {
 
