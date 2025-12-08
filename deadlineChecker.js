@@ -75,7 +75,5 @@ const main = async () => {
     }
 };
 
-main().catch(console.error);
-
 // Original function export is no longer needed as this is a standalone script
-// export const checkDeadlines = main;
+export const checkDeadlines = main;
