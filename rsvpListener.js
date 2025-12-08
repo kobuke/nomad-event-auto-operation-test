@@ -63,7 +63,7 @@ const main = async () => {
             [dbUserId, event.id]
           );
           
-                    const settingRes = await query("SELECT value FROM app_settings WHERE key = 'SEND_DM_FOR_ZERO_PAYMENT_TEST'");
+          const settingRes = await query("SELECT value FROM app_settings WHERE key = 'SEND_DM_FOR_ZERO_PAYMENT_TEST'");
           const sendDmForZeroPayment = settingRes.rows.length > 0 && settingRes.rows[0].value === 'true';
 
           if (event.price_jpy > 0 || sendDmForZeroPayment) {
