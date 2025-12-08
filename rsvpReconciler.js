@@ -105,10 +105,7 @@ const main = async () => {
 
 
 
-                                                                          WHERE r.event_id = 
-
-
-                                      AND r.status = 'going'`,
+                                     WHERE r.event_id = $1 AND r.status = 'going'`,
 
                     [event.id]
 
@@ -136,12 +133,12 @@ const main = async () => {
 
                             await query(
 
-                                                                `INSERT INTO rsvps (user_id, event_id, status, source, rsvp_at) 
+                                                                                                `INSERT INTO rsvps (user_id, event_id, status, source, rsvp_at) 
 
-                                                                 VALUES (
-                                , $2, 'going', 'reconciler', NOW()) 
+                                                                                                 VALUES (
+                                                                , $2, 'going', 'reconciler', NOW()) 
 
-                                                                 ON CONFLICT (user_id, event_id) DO UPDATE SET status = 'going'`,
+                                                                                                 ON CONFLICT (user_id, event_id) DO UPDATE SET status = 'going'`,
 
                                 [internalUserId, event.id]
 
