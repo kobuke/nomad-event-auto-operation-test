@@ -6,92 +6,70 @@
     <title>Payment Successful</title>
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@300;700&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Open+Sans:wght@400;700&display=swap" rel="stylesheet">
     <style>
         body, html {
-            margin: 0;
-            padding: 0;
-            width: 100%;
             height: 100%;
-            font-family: 'Poppins', sans-serif;
-            background-color: #1a1a2e;
-            color: #e0e0e0;
+            margin: 0;
+            font-family: 'Open Sans', sans-serif;
+            background-color: #313338; /* Discord's main dark background */
             display: flex;
             justify-content: center;
             align-items: center;
-            text-align: center;
-            overflow: hidden;
+            color: #FFFFFF;
         }
         .container {
-            z-index: 1;
-            padding: 20px;
+            background-color: #2B2D31; /* Discord's slightly lighter dark bg */
+            padding: 40px 50px;
+            border-radius: 8px;
+            text-align: center;
+            box-shadow: 0 8px 16px rgba(0,0,0,0.2);
+            width: 90%;
+            max-width: 450px;
         }
-        .neon-title {
-            font-size: 4rem;
+        .icon-success {
+            width: 80px;
+            height: 80px;
+            margin-bottom: 20px;
+        }
+        h1 {
+            font-size: 2rem;
             font-weight: 700;
-            color: #fff;
-            text-shadow:
-                0 0 7px #fff,
-                0 0 10px #fff,
-                0 0 21px #fff,
-                0 0 42px #0fa,
-                0 0 82px #0fa,
-                0 0 92px #0fa,
-                0 0 102px #0fa,
-                0 0 151px #0fa;
-            animation: flicker 1.5s infinite alternate;
+            margin: 0 0 10px 0;
+            color: #FFFFFF;
         }
         p {
-            font-size: 1.2rem;
-            font-weight: 300;
-            color: #c0c0c0;
-            margin-top: 20px;
-        }
-        .button-container {
-            margin-top: 40px;
+            font-size: 1rem;
+            color: #B5BAC1; /* Discord's secondary text color */
+            line-height: 1.6;
         }
         .close-button {
-            padding: 10px 20px;
-            font-size: 1rem;
-            color: #fff;
-            background-color: transparent;
-            border: 2px solid #0fa;
+            background-color: #5865F2; /* Discord's Blurple */
+            color: #FFFFFF;
+            border: none;
             border-radius: 5px;
+            padding: 12px 24px;
+            font-size: 1rem;
+            font-weight: 700;
             cursor: pointer;
-            transition: all 0.3s ease;
-            box-shadow: 0 0 10px #0fa;
+            margin-top: 30px;
+            transition: background-color 0.2s ease;
+            width: 100%;
         }
         .close-button:hover {
-            background-color: #0fa;
-            color: #1a1a2e;
-            box-shadow: 0 0 20px #0fa, 0 0 30px #0fa;
-        }
-
-        @keyframes flicker {
-          0%, 18%, 22%, 25%, 53%, 57%, 100% {
-              text-shadow:
-                0 0 4px #fff,
-                0 0 11px #fff,
-                0 0 19px #fff,
-                0 0 40px #0fa,
-                0 0 80px #0fa,
-                0 0 90px #0fa,
-                0 0 100px #0fa,
-                0 0 150px #0fa;
-          }
-          20%, 24%, 55% {
-              text-shadow: none;
-          }
+            background-color: #4752C4; /* Darker Blurple */
         }
     </style>
 </head>
 <body>
     <div class="container">
-        <h1 class="neon-title">PAYMENT SUCCESSFUL</h1>
+        <svg class="icon-success" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 52 52">
+            <circle cx="26" cy="26" r="25" fill="#23A55A"/> <!-- Discord Green -->
+            <path fill="none" stroke="#FFFFFF" stroke-width="4" stroke-linecap="round" stroke-linejoin="round" d="M14.1 27.2l7.1 7.2 16.7-16.8"/>
+        </svg>
+        <h1>Payment Successful</h1>
         <p>Thank you for your participation.<br>A confirmation DM has been sent via Discord.</p>
-        <div class="button-container">
-            <button class="close-button" onclick="window.close()">Close Window</button>
-        </div>
+        <button class="close-button" onclick="window.close()">Close Window</button>
     </div>
 </body>
 </html>
