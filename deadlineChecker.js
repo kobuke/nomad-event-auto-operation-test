@@ -29,12 +29,12 @@ const main = async () => {
             SELECT id, name, discord_thread_id, deadline_at, remind1_at, remind2_at, deadline_notice_sent, remind1_sent, remind2_sent
             FROM events
             WHERE
-              (deadline_at IS NOT NULL AND deadline_at < NOW() AND (deadline_notice_sent IS NULL OR deadline_notice_sent = FALSE)) OR
-              (remind1_at IS NOT NULL AND remind1_at < NOW() AND (remind1_sent IS NULL OR remind1_sent = FALSE)) OR
-              (remind2_at IS NOT NULL AND remind2_at < NOW() AND (remind2_sent IS NULL OR remind2_sent = FALSE));
+              (deadline_at IS NOT NULL AND deadline_at < (NOW() AT TIME ZONE 'Asia/Tokyo') AND (deadline_notice_sent IS NULL OR deadline_notice_sent = FALSE)) OR
+              (remind1_at IS NOT NULL AND remind1_at < (NOW() AT TIME ZONE 'Asia/Tokyo') AND (remind1_sent IS NULL OR remind1_sent = FALSE)) OR
+              (remind2_at IS NOT NULL AND remind2_at < (NOW() AT TIME ZONE 'Asia/Tokyo') AND (remind2_sent IS NULL OR remind2_sent = FALSE));
         `);
 
-        const now = new Date();
+        const now = new Date(new Date().toLocaleString('en-US', { timeZone: 'Asia/Tokyo' }));
 
         for (const event of eventsResult.rows) {
             console.log(`[DB] Processing event: ${event.name}`);
@@ -43,8 +43,7 @@ const main = async () => {
 
             if (event.deadline_at && now > new Date(event.deadline_at) && !event.deadline_notice_sent) {
                 await channel.send(
-                    `${allUserMentions}\n📢 **Recruitment for ${event.name} has officially closed!** 📢\n` +
-                    `Thank you to everyone who showed interest and signed up! We're so excited for the event! ✨`
+                    `${allUserMentions}\n📢 **Recruitment for ${event.name} has officially closed!** 📢\n`
                 );
                 console.log(`✅ Sent deadline message for event: ${event.name}`);
                 await query('UPDATE events SET deadline_notice_sent = TRUE WHERE id = $1', [event.id]);
@@ -53,7 +52,7 @@ const main = async () => {
             if (event.remind1_at && now > new Date(event.remind1_at) && !event.remind1_sent) {
                 await channel.send(
                     `${allUserMentions}\n🔔 **Friendly Reminder** 🔔\n` +
-                    `Just a quick heads-up about ${event.name}.\n\nTo reserve a spot for an event, please react with a 👍 on **the pinned post!**`
+                    `Just a quick heads-up about ${event.name}.`
                 );
                 console.log(`✅ Sent Reminder 1 message for event: ${event.name}`);
                 await query('UPDATE events SET remind1_sent = TRUE WHERE id = $1', [event.id]);
@@ -62,7 +61,7 @@ const main = async () => {
             if (event.remind2_at && now > new Date(event.remind2_at) && !event.remind2_sent) {
                 await channel.send(
                     `${allUserMentions}\n⏰ **Last Chance Reminder** ⏰\n` +
-                    `This is your final reminder for ${event.name}.\n\nTo reserve a spot for an event, please react with a 👍 on **the pinned post!**`
+                    `This is your final reminder for ${event.name}.`
                 );
                 console.log(`✅ Sent Reminder 2 message for event: ${event.name}`);
                 await query('UPDATE events SET remind2_sent = TRUE WHERE id = $1', [event.id]);
