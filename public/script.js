@@ -210,10 +210,7 @@ document.addEventListener('DOMContentLoaded', () => {
                                     </div>
                                 </div>
                             </div>
-                            <div class="mt-auto d-grid gap-2 d-sm-flex justify-content-sm-center">
-                                <button class="btn btn-outline-secondary btn-sm edit-event-btn" data-event-id="${event.id}">詳細管理画面へ</button>
-                                <button class="btn btn-outline-danger btn-sm delete-btn" data-id="${event.id}">削除</button>
-                            </div>
+                            <button class="btn btn-outline-secondary btn-sm mt-auto edit-event-btn" data-event-id="${event.id}">詳細管理画面へ</button>
                         </div>
                     </div>
                 </div>
@@ -436,6 +433,9 @@ document.addEventListener('DOMContentLoaded', () => {
             editForm.dataset.id = id;
             buildFormFromSchema(schema, item);
             document.getElementById('editModalLabel').textContent = `Edit ${currentView.slice(0, -1)} #${id}`;
+            const deleteBtn = document.getElementById('modal-delete-btn');
+            deleteBtn.style.display = 'block'; // 編集時は表示
+            deleteBtn.dataset.id = id; // 削除ボタンにIDを設定
             editModal.show();
         } catch (error) { console.error('Edit error:', error); }
     };
@@ -495,6 +495,8 @@ document.addEventListener('DOMContentLoaded', () => {
             delete editForm.dataset.id;
             buildFormFromSchema(schema);
             document.getElementById('editModalLabel').textContent = `Create New ${currentView.slice(0, -1)}`;
+            const deleteBtn = document.getElementById('modal-delete-btn');
+            deleteBtn.style.display = 'none'; // 新規作成時は非表示
             editModal.show();
         } catch(error) { console.error('Create error:', error); }
     };
@@ -624,4 +626,12 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // Initial Load
     loadView(currentView);
+
+    document.getElementById('modal-delete-btn').addEventListener('click', (e) => {
+        const id = e.target.dataset.id;
+        if (id) {
+            editModal.hide(); // 先にモーダルを隠す
+            handleDelete(id);
+        }
+    });
 });
