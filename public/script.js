@@ -210,7 +210,10 @@ document.addEventListener('DOMContentLoaded', () => {
                                     </div>
                                 </div>
                             </div>
-                            <button class="btn btn-outline-secondary btn-sm mt-auto edit-event-btn" data-event-id="${event.id}">詳細管理画面へ</button>
+                            <div class="mt-auto d-grid gap-2 d-sm-flex justify-content-sm-center">
+                                <button class="btn btn-outline-secondary btn-sm edit-event-btn" data-event-id="${event.id}">詳細管理画面へ</button>
+                                <button class="btn btn-outline-danger btn-sm delete-btn" data-id="${event.id}">削除</button>
+                            </div>
                         </div>
                     </div>
                 </div>
