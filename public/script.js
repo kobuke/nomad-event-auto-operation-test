@@ -107,15 +107,20 @@ document.addEventListener('DOMContentLoaded', () => {
                                         <th>Amount (JPY)</th>
                                         <th>Status</th>
                                         <th>Date</th>
+                                        <th>Actions</th>
                                     </tr>
                                 </thead>
                                 <tbody>
                                     ${userPayments.map(payment => `
-                                        <tr>
+                                        <tr data-id="${payment.id}">
                                             <td>${payment.event_name || 'N/A'}</td>
                                             <td>¥${payment.amount_jpy ? payment.amount_jpy.toLocaleString() : '0'}</td>
                                             <td>${payment.status}</td>
                                             <td>${payment.paid_at ? new Date(payment.paid_at).toLocaleString() : (payment.dm_sent_at ? new Date(payment.dm_sent_at).toLocaleString() + ' (DM Sent)' : 'N/A')}</td>
+                                            <td>
+                                                <button class="btn btn-sm btn-outline-secondary edit-btn" data-id="${payment.id}">Edit</button>
+                                                <button class="btn btn-sm btn-outline-danger delete-btn" data-id="${payment.id}">Delete</button>
+                                            </td>
                                         </tr>
                                     `).join('')}
                                 </tbody>
@@ -259,16 +264,21 @@ document.addEventListener('DOMContentLoaded', () => {
                                         <th>Status</th>
                                         <th>RSVPed At</th>
                                         <th>Cancelled At</th>
+                                        <th>Actions</th>
                                     </tr>
                                 </thead>
                                 <tbody>
                                     ${eventRsvps.map(rsvp => `
-                                        <tr>
+                                        <tr data-id="${rsvp.id}">
                                             <td>${rsvp.username}</td>
                                             <td>${rsvp.display_name || rsvp.username}</td>
                                             <td><span class="badge ${rsvp.status === 'going' ? 'bg-success' : 'bg-secondary'}">${rsvp.status}</span></td>
                                             <td>${new Date(rsvp.rsvp_at).toLocaleString()}</td>
                                             <td>${rsvp.cancelled_at ? new Date(rsvp.cancelled_at).toLocaleString() : '<span class="text-muted">N/A</span>'}</td>
+                                            <td>
+                                                <button class="btn btn-sm btn-outline-secondary edit-btn" data-id="${rsvp.id}">Edit</button>
+                                                <button class="btn btn-sm btn-outline-danger delete-btn" data-id="${rsvp.id}">Delete</button>
+                                            </td>
                                         </tr>
                                     `).join('')}
                                 </tbody>
