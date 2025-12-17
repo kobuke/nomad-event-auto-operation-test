@@ -1,3 +1,0 @@
-fix: Ensure HTTPS for Stripe checkout session request in vote_listener.js
-
-- Modify `vote_listener.js` to explicitly use `https://` when fetching Stripe checkout sessions, resolving 404 errors in remote environment.
